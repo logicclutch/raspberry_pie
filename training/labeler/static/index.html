@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="no-referrer">
+  <title>Plate Labeller · ANPR training</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <div class="brand-name">Plate Labeller</div>
+        <div class="brand-sub">OCR fine-tuning dataset · local only</div>
+      </div>
+    </div>
+    <div class="progress" aria-label="Labelling progress">
+      <div class="progress-head">
+        <span id="pct" class="progress-pct">0%</span>
+        <span class="progress-label">labelled</span>
+        <span class="chips">
+          <span class="chip chip-unverified"><b id="n-unverified">0</b> unverified</span>
+          <span class="chip chip-verified"><b id="n-verified">0</b> verified</span>
+          <span class="chip chip-unreadable"><b id="n-unreadable">0</b> unreadable</span>
+          <span class="chip chip-skip"><b id="n-skip">0</b> skip</span>
+        </span>
+      </div>
+      <div class="bar"><i id="bar-verified"></i><i id="bar-unreadable"></i><i id="bar-skip"></i></div>
+    </div>
+    <label class="who">
+      <span>Labeller</span>
+      <input id="labeler" type="text" maxlength="40" autocomplete="off" spellcheck="false" placeholder="your name">
+    </label>
+  </header>
+
+  <nav class="toolbar" aria-label="Filters">
+    <label>Show
+      <select id="f-status">
+        <option value="unverified" selected>Unverified only</option>
+        <option value="all">All</option>
+        <option value="verified">Verified</option>
+        <option value="unreadable">Unreadable</option>
+        <option value="skip">Skipped</option>
+      </select>
+    </label>
+    <label>Source
+      <select id="f-source"><option value="">All sources</option></select>
+    </label>
+    <label>Lines
+      <select id="f-lines">
+        <option value="any">1- and 2-line</option>
+        <option value="0">1-line</option>
+        <option value="1">2-line</option>
+      </select>
+    </label>
+    <button type="button" id="reload" class="btn btn-ghost">Reload</button>
+    <span class="spacer"></span>
+    <button type="button" id="prev" class="btn btn-ghost" title="Previous (↑)">‹ Prev</button>
+    <span id="pos" class="pos">0 / 0</span>
+    <button type="button" id="next" class="btn btn-ghost" title="Next (↓)">Next ›</button>
+  </nav>
+
+  <main class="layout">
+    <section class="stage" aria-label="Current crop">
+      <div id="empty" class="empty" hidden>
+        <p class="empty-title">Nothing to label here</p>
+        <p class="muted">No crops match the filters. Change the filters above, or harvest more video.</p>
+      </div>
+
+      <div id="work">
+        <div class="viewer">
+          <figure class="shot shot-main">
+            <img id="img-main" alt="Plate crop as the OCR sees it">
+            <figcaption>OCR input <span id="prep" class="tag"></span></figcaption>
+          </figure>
+          <figure class="shot shot-raw">
+            <img id="img-raw" alt="Raw padded crop">
+            <figcaption>Raw crop</figcaption>
+          </figure>
+        </div>
+
+        <div class="entry">
+          <div class="entry-row">
+            <label for="plate" class="sr">Plate text</label>
+            <input id="plate" class="plate-input" type="text" maxlength="12" autocomplete="off"
+                   autocapitalize="characters" spellcheck="false" inputmode="text">
+            <button type="button" id="save" class="btn btn-accent">Save <kbd>Enter</kbd></button>
+          </div>
+          <p id="hint" class="hint" role="status" aria-live="polite"></p>
+          <div id="confirm" class="confirm" hidden>
+            <span id="confirm-msg"></span>
+            <button type="button" id="confirm-yes" class="btn btn-warn">Save anyway</button>
+            <button type="button" id="confirm-no" class="btn btn-ghost">Cancel</button>
+          </div>
+          <div class="actions">
+            <button type="button" id="track-apply" class="btn">Apply to track <kbd>Alt T</kbd></button>
+            <button type="button" id="unreadable" class="btn">Unreadable <kbd>Ctrl ↵</kbd></button>
+            <button type="button" id="skip" class="btn">Skip <kbd>Alt S</kbd></button>
+            <button type="button" id="reset" class="btn btn-ghost">Reset to unverified</button>
+          </div>
+        </div>
+
+        <dl class="meta" id="meta">
+          <div><dt>OCR read</dt><dd id="m-ocr"></dd></div>
+          <div><dt>Status</dt><dd id="m-status"></dd></div>
+          <div><dt>Source</dt><dd id="m-source"></dd></div>
+          <div><dt>Video</dt><dd id="m-video"></dd></div>
+          <div><dt>Track · frame</dt><dd id="m-track"></dd></div>
+          <div><dt>Width · lines</dt><dd id="m-size"></dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <aside class="side">
+      <section class="panel">
+        <h2 id="track-title">Track</h2>
+        <p class="muted small">Every crop of this vehicle pass. <kbd>Alt T</kbd> saves the typed text on all
+          unverified crops of the track.</p>
+        <ol id="track" class="track"></ol>
+      </section>
+      <section class="panel keys">
+        <h2>Keys</h2>
+        <dl>
+          <div><dt><kbd>Enter</kbd></dt><dd>Save as verified</dd></div>
+          <div><dt><kbd>Ctrl/⌘ Enter</kbd></dt><dd>Unreadable</dd></div>
+          <div><dt><kbd>Alt S</kbd></dt><dd>Skip</dd></div>
+          <div><dt><kbd>Alt T</kbd></dt><dd>Apply text to track</dd></div>
+          <div><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Previous / next</dd></div>
+          <div><dt><kbd>Esc</kbd></dt><dd>Leave the text box: then <kbd>S</kbd> <kbd>T</kbd> <kbd>U</kbd>
+            <kbd>←</kbd> <kbd>→</kbd> work alone, <kbd>E</kbd> edits</dd></div>
+        </dl>
+      </section>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" role="alert" hidden></div>
+</body>
+</html>

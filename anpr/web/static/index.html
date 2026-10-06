@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0a0d12" id="theme-color">
+  <meta name="referrer" content="no-referrer">
+  <title>ANPR Console · LogicClutch Software LLP</title>
+  <link rel="icon" type="image/png" href="/static/logicclutch-logo.png">
+  <script src="/static/theme.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#log">Skip to plate log</a>
+
+  <!-- Top bar ---------------------------------------------------------------------------------------->
+  <header class="topbar">
+    <span class="topbar-glow" aria-hidden="true"></span>
+    <div class="brand">
+      <span class="brand-logo">
+        <img src="/static/logicclutch-logo.png" alt="LogicClutch" width="40" height="40">
+        <i class="brand-dot" title="Station health"></i>
+      </span>
+      <div class="brand-text">
+        <span class="brand-name">LogicClutch Software LLP</span>
+        <span class="brand-station">Number plate recognition · <span id="station">Gate 1</span></span>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <button type="button" id="streampill" class="streampill" title="Current camera input — click to change">
+        <span class="sp-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><rect x="2.5" y="5" width="11" height="10" rx="2"></rect><path d="M13.5 9l4-2.5v7l-4-2.5"></path></svg></span>
+        <span class="sp-text"><span class="sp-k">Camera input</span><span class="sp-v" id="sp-v">—</span></span>
+        <span class="sp-dot" aria-hidden="true"></span>
+      </button>
+      <button type="button" id="addstream" class="btn btn-accent btn-add">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"></path></svg>
+        <span>Add stream</span>
+      </button>
+
+      <div class="tb-tools">
+        <button type="button" id="sound" class="iconbtn tb-btn" aria-pressed="false" title="Sound for new plates: off">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M10 3a4.5 4.5 0 0 0-4.5 4.5c0 3.6-1.6 5.2-1.6 5.2h12.2s-1.6-1.6-1.6-5.2A4.5 4.5 0 0 0 10 3z"></path>
+            <path d="M8.3 15.6a1.8 1.8 0 0 0 3.4 0"></path>
+            <path class="i-off" d="M3.5 3.5l13 13"></path>
+          </svg>
+          <span class="sr">Sound for new plates</span>
+        </button>
+        <button type="button" id="settingsbtn" class="iconbtn tb-btn" title="Settings: send plates to the client's API">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="2.6"></circle><path d="M10 2.5l1.3 2.1 2.4-.6.6 2.4 2.1 1.3-1.1 2.3 1.1 2.3-2.1 1.3-.6 2.4-2.4-.6L10 17.5l-1.3-2.1-2.4.6-.6-2.4-2.1-1.3 1.1-2.3-1.1-2.3 2.1-1.3.6-2.4 2.4.6z"></path></svg>
+          <span class="sr">Settings</span>
+        </button>
+        <button type="button" id="theme" class="iconbtn tb-btn" title="Switch to light theme">
+          <svg class="i-sun" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.4"></circle><path d="M10 2.5V4M10 16v1.5M2.5 10H4M16 10h1.5M4.7 4.7l1.1 1.1M14.2 14.2l1.1 1.1M4.7 15.3l1.1-1.1M14.2 5.8l1.1-1.1"></path></svg>
+          <svg class="i-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.2 12.4A6.6 6.6 0 0 1 7.6 3.8a6.6 6.6 0 1 0 8.6 8.6z"></path></svg>
+          <span class="sr">Switch theme</span>
+        </button>
+      </div>
+
+      <span id="link" class="link link-off" title="Live connection to the station">
+        <span class="dot" aria-hidden="true"></span><span class="link-text">Connecting</span>
+      </span>
+      <div class="clock" aria-label="Station time">
+        <time id="clock-time">--:--:--</time>
+        <span id="clock-date">—</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+  <main class="shell">
+    <!-- Row A: camera + recent vehicles -------------------------------------------------------------->
+    <section class="grid-a">
+      <article class="panel capture is-live" id="capture" aria-labelledby="cap-title">
+        <header class="panel-head">
+          <h2 id="cap-title">Live camera</h2>
+          <div class="cap-tools">
+            <div class="vt" role="radiogroup" aria-label="Picture">
+              <button type="button" role="radio" class="vt-b" id="vt-live" data-view="live" aria-checked="true" tabindex="0">
+                <i class="vt-dot" aria-hidden="true"></i>Live
+              </button>
+              <button type="button" role="radio" class="vt-b" id="vt-last" data-view="last" aria-checked="false" tabindex="-1">Last vehicle</button>
+            </div>
+            <span id="cap-age" class="chip chip-muted">waiting</span>
+          </div>
+        </header>
+        <div class="viewfinder" id="viewfinder">
+          <img id="cap-snap" class="vf-img" alt="" hidden>
+          <img id="cap-live" class="vf-img vf-live" alt="" hidden>
+          <div class="vf-empty" id="cap-empty">
+            <span class="scan" aria-hidden="true"></span>
+            <span class="vf-empty-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><rect x="2.5" y="5" width="11" height="10" rx="2"></rect><path d="M13.5 9l4-2.5v7l-4-2.5"></path></svg></span>
+            <p id="cap-empty-t">Waiting for the first confirmed vehicle</p>
+            <small id="cap-empty-s">Plates appear here once several frames agree and the Indian format check passes.</small>
+          </div>
+          <div class="vf-top">
+            <span class="vf-badge" id="cap-badge" hidden><i aria-hidden="true"></i><b id="cap-badge-t">Live</b><span id="cap-badge-s"></span></span>
+            <button type="button" id="cap-cta" class="btn btn-accent btn-sm vf-cta" hidden>
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"></path></svg>
+              <span>Add stream</span>
+            </button>
+          </div>
+          <span class="corner tl" aria-hidden="true"></span><span class="corner tr" aria-hidden="true"></span>
+          <span class="corner bl" aria-hidden="true"></span><span class="corner br" aria-hidden="true"></span>
+          <figure class="vf-crop" id="cap-cropwrap" hidden>
+            <img id="cap-crop" alt="">
+            <figcaption>Plate as read</figcaption>
+          </figure>
+          <div class="vf-overlay" aria-live="polite">
+            <div class="vf-last">
+              <span class="vf-lastk">Last confirmed vehicle</span>
+              <div id="cap-plate" class="plate plate-xl is-empty" title="Open details">
+                <span class="plate-band"><i></i><b>IND</b></span><span class="plate-txt">— — — —</span>
+              </div>
+            </div>
+            <dl class="vf-meta">
+              <div><dt>Time</dt><dd id="cap-time">—</dd></div>
+              <div><dt>Seen in</dt><dd id="cap-votes">—</dd></div>
+              <div><dt>Plate type</dt><dd id="cap-kind">—</dd></div>
+              <div><dt>HSRP</dt><dd id="cap-hsrp">—</dd></div>
+              <div class="ring-wrap">
+                <svg class="ring" viewBox="0 0 44 44" aria-hidden="true">
+                  <circle class="ring-bg" cx="22" cy="22" r="18"></circle>
+                  <circle class="ring-fg" id="cap-ring" cx="22" cy="22" r="18"></circle>
+                </svg>
+                <div><dt>Confidence</dt><dd id="cap-conf">—</dd></div>
+              </div>
+            </dl>
+          </div>
+        </div>
+      </article>
+
+      <aside class="panel recent" aria-labelledby="recent-title">
+        <header class="panel-head">
+          <h2 id="recent-title">Recent vehicles</h2>
+          <button type="button" class="linkbtn" id="recent-all">View all</button>
+        </header>
+        <ol class="recent-list" id="recent">
+          <li class="recent-empty">No vehicles yet. Confirmed plates will appear here.</li>
+        </ol>
+      </aside>
+    </section>
+
+    <!-- Row B: headline figures ------------------------------------------------------------------------>
+    <section class="kpis" aria-label="Traffic figures">
+      <div class="kpi kpi-lead" title="Confirmed vehicles since midnight">
+        <span class="kpi-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M3.8 12V9.6l1.7-3.5c.3-.6.8-.9 1.4-.9h6.2c.6 0 1.1.3 1.4.9l1.7 3.5V12"></path><rect x="2.8" y="9.4" width="14.4" height="4.8" rx="1.3"></rect><path d="M5.2 14.2v1.8M14.8 14.2v1.8"></path></svg></span>
+        <span class="kpi-k">Vehicles today</span><span class="kpi-v" id="k-today">—</span><span class="kpi-s" id="k-today-s">&nbsp;</span>
+        <svg class="kpi-spark" id="k-spark" viewBox="0 0 120 36" preserveAspectRatio="none" aria-hidden="true"></svg>
+      </div>
+      <div class="kpi kpi-violet" title="Different number plates seen since midnight">
+        <span class="kpi-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><rect x="2.5" y="5.5" width="15" height="9" rx="1.8"></rect><path d="M5.5 5.5v9"></path><path d="M8.5 10h6"></path></svg></span>
+        <span class="kpi-k">Different plates today</span><span class="kpi-v" id="k-unique">—</span><span class="kpi-s">unique vehicles</span>
+      </div>
+      <div class="kpi kpi-sky" title="Confirmed vehicles in the last 60 minutes">
+        <span class="kpi-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"></circle><path d="M10 6.2V10l2.6 1.8"></path></svg></span>
+        <span class="kpi-k">Last hour</span><span class="kpi-v" id="k-hour">—</span><span class="kpi-s">confirmed vehicles</span>
+      </div>
+      <div class="kpi kpi-green" title="Average reading confidence of confirmed plates, last 24 hours">
+        <span class="kpi-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M10 2.6l6 2.2v4.5c0 3.9-2.6 6.6-6 8.1-3.4-1.5-6-4.2-6-8.1V4.8z"></path><path d="M7.3 10l2 2 3.6-3.8"></path></svg></span>
+        <span class="kpi-k">Average confidence</span><span class="kpi-v" id="k-conf">—</span><span class="kpi-s">last 24 hours</span>
+        <svg class="kpi-ring" viewBox="0 0 44 44" aria-hidden="true"><circle class="kr-bg" cx="22" cy="22" r="18"></circle><circle class="kr-fg" id="k-ring" cx="22" cy="22" r="18"></circle></svg>
+      </div>
+    </section>
+
+    <!-- Row C: traffic chart + frequent vehicles -------------------------------------------------------->
+    <section class="grid-b">
+      <div class="panel chart-panel">
+        <header class="panel-head">
+          <h2>Traffic in the last 24 hours</h2>
+          <span class="chip chip-muted" id="chart-peak">—</span>
+        </header>
+        <svg id="chart" class="chart" viewBox="0 0 480 140" preserveAspectRatio="none" role="img" aria-label="Vehicles per hour, last 24 hours"></svg>
+        <div class="chart-axis" id="chart-axis" aria-hidden="true"></div>
+      </div>
+      <div class="panel top-panel">
+        <header class="panel-head"><h2>Frequent vehicles</h2><span class="chip chip-muted">24 h</span></header>
+        <ol class="toplist" id="toplist"><li class="muted">No vehicles yet.</li></ol>
+      </div>
+    </section>
+
+    <!-- Row D: system health -------------------------------------------------------------------------->
+    <section class="panel health-panel" aria-labelledby="health-title">
+      <header class="panel-head">
+        <h2 id="health-title">System health</h2>
+        <span class="chip chip-muted" id="health-sum">Checking…</span>
+      </header>
+      <div class="health">
+        <div class="gauge" id="g-engine">
+          <span class="g-top"><span class="g-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><rect x="5" y="5" width="10" height="10" rx="1.6"></rect><path d="M8 2.5V5M12 2.5V5M8 15v2.5M12 15v2.5M2.5 8H5M2.5 12H5M15 8h2.5M15 12h2.5"></path></svg></span><span class="g-k">Recognition engine</span></span>
+          <span class="g-v">—</span><span class="g-s">&nbsp;</span>
+        </div>
+        <div class="gauge" id="g-camera">
+          <span class="g-top"><span class="g-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><rect x="2.5" y="5" width="11" height="10" rx="2"></rect><path d="M13.5 9l4-2.5v7l-4-2.5"></path></svg></span><span class="g-k">Camera</span></span>
+          <span class="g-v">—</span><span class="g-s">&nbsp;</span>
+        </div>
+        <div class="gauge" id="g-fps">
+          <span class="g-top"><span class="g-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M3.4 14.5a6.6 6.6 0 1 1 13.2 0"></path><path d="M10 14.5l3.2-4.2"></path></svg></span><span class="g-k">Processing speed</span></span>
+          <span class="g-v">—</span><span class="g-s">frames per second</span>
+        </div>
+        <div class="gauge" id="g-temp">
+          <span class="g-top"><span class="g-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M8.5 11.6V4.2a1.5 1.5 0 0 1 3 0v7.4a3.1 3.1 0 1 1-3 0z"></path></svg></span><span class="g-k">Processor temperature</span></span>
+          <span class="g-v">—</span><span class="g-bar"><i></i></span>
+        </div>
+        <div class="gauge" id="g-mem">
+          <span class="g-top"><span class="g-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><rect x="2.5" y="6" width="15" height="8" rx="1.5"></rect><path d="M6 9.2v1.6M9 9.2v1.6M12 9.2v1.6M15 9.2v1.6"></path></svg></span><span class="g-k">Memory used</span></span>
+          <span class="g-v">—</span><span class="g-s">by the engine</span>
+        </div>
+        <div class="gauge" id="g-disk">
+          <span class="g-top"><span class="g-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><ellipse cx="10" cy="5.5" rx="6" ry="2.4"></ellipse><path d="M4 5.5v9c0 1.3 2.7 2.4 6 2.4s6-1.1 6-2.4v-9"></path><path d="M4 10c0 1.3 2.7 2.4 6 2.4s6-1.1 6-2.4"></path></svg></span><span class="g-k">Storage free</span></span>
+          <span class="g-v">—</span><span class="g-bar"><i></i></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Row E: plate log -------------------------------------------------------------------------------->
+    <section class="panel log" id="log" aria-labelledby="log-title">
+      <header class="log-head">
+        <div class="log-title">
+          <h2 id="log-title">Plate log</h2>
+          <p class="summary" id="summary">Loading…</p>
+        </div>
+        <div class="range" role="radiogroup" aria-label="Time range">
+          <button type="button" role="radio" class="rg-b" data-range="all" aria-checked="true">All</button>
+          <button type="button" role="radio" class="rg-b" data-range="hour" aria-checked="false">Last hour</button>
+          <button type="button" role="radio" class="rg-b" data-range="today" aria-checked="false">Today</button>
+          <button type="button" role="radio" class="rg-b" data-range="week" aria-checked="false">7 days</button>
+        </div>
+      </header>
+      <form id="filters" class="filters" autocomplete="off">
+        <label class="search">
+          <span class="sr">Search plate</span>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"></circle><path d="M13 13l4 4"></path></svg>
+          <input id="q" name="q" type="search" autocapitalize="characters" spellcheck="false"
+                 maxlength="32" placeholder="Search a plate, e.g. MH12 or 1234">
+          <kbd aria-hidden="true">/</kbd>
+        </label>
+        <label class="date"><span>From</span><input id="from" name="from" type="date"></label>
+        <label class="date"><span>To</span><input id="to" name="to" type="date"></label>
+        <button type="button" id="clear" class="btn btn-ghost">Reset</button>
+        <span class="f-spacer"></span>
+        <a id="export" class="btn btn-soft" href="/api/v1/plates/export.csv" download>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m0 0l-3.5-3.5M10 12l3.5-3.5M4 15h12"></path></svg>
+          Download CSV
+        </a>
+      </form>
+
+      <button type="button" id="newbadge" class="newbadge" hidden></button>
+      <div id="msg" class="msg" role="status" hidden></div>
+
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">Time</th>
+              <th scope="col">Number plate</th>
+              <th scope="col" class="c-crop">Plate image</th>
+              <th scope="col">Confidence</th>
+              <th scope="col" class="c-num">Seen in</th>
+              <th scope="col" class="c-kind">Type</th>
+              <th scope="col" class="c-hsrp" title="High Security Registration Plate: hologram + IND seen left of the number">HSRP</th>
+              <th scope="col" class="c-go"><span class="sr">Details</span></th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+
+      <nav class="pager" aria-label="Pages">
+        <button type="button" id="prev" class="btn btn-ghost">‹ Newer</button>
+        <span id="pageinfo" class="pageinfo">Page 1</span>
+        <button type="button" id="next" class="btn btn-ghost">Older ›</button>
+      </nav>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span id="rules">Only plates confirmed across several frames and a strict Indian-format check are shown.</span>
+    <span class="foot-right">
+      <button type="button" id="changetoken" class="linkbtn" hidden>Change access token</button>
+      <button type="button" id="licence" class="foot-licence linkbtn" hidden title="Licence and activation"></button>
+      <span class="foot-brand">© LogicClutch Software LLP</span>
+    </span>
+  </footer>
+
+  <!-- New-plate pop-ups ----------------------------------------------------------------------------------->
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <!-- Detail drawer --------------------------------------------------------------------------------------->
+  <dialog id="drawer" class="drawer" aria-labelledby="d-title">
+    <div class="drawer-inner">
+      <header class="drawer-head">
+        <div>
+          <span class="eyebrow" id="d-eyebrow">Event</span>
+          <h2 id="d-title" class="sr">Plate details</h2>
+        </div>
+        <button type="button" class="iconbtn" id="d-close" aria-label="Close details">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"></path></svg>
+        </button>
+      </header>
+      <div class="d-platerow">
+        <div id="d-plate" class="plate plate-lg"><span class="plate-band"><i></i><b>IND</b></span><span class="plate-txt"></span></div>
+        <button type="button" class="btn btn-ghost btn-sm" id="d-copy" title="Copy the plate number">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M13 7V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13H7"></path></svg>
+          <span>Copy</span>
+        </button>
+      </div>
+      <div class="d-media">
+        <img id="d-snap" alt="" hidden>
+        <div class="d-nosnap" id="d-nosnap">No snapshot stored</div>
+      </div>
+      <div class="d-cropbox"><img id="d-crop" alt="" hidden></div>
+      <dl class="d-fields" id="d-fields"></dl>
+      <div class="d-actions">
+        <button type="button" class="btn btn-accent" id="d-search">Show all sightings</button>
+        <a class="btn btn-ghost" id="d-open-snap" target="_blank" rel="noopener">Open snapshot</a>
+        <a class="btn btn-ghost" id="d-open-crop" target="_blank" rel="noopener">Open plate image</a>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Add stream ------------------------------------------------------------------------------------------->
+  <dialog id="streamdlg" class="streamdlg" aria-labelledby="s-title">
+    <form id="streamform" novalidate autocomplete="off">
+      <header class="s-head">
+        <div>
+          <span class="eyebrow">Camera input</span>
+          <h2 id="s-title">Add stream</h2>
+        </div>
+        <button type="button" class="iconbtn" id="s-close" aria-label="Close">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"></path></svg>
+        </button>
+      </header>
+
+      <div class="s-now">
+        <span class="s-now-k">Now reading</span>
+        <span class="s-now-v" id="s-now-v">—</span>
+        <span class="chip chip-muted" id="s-now-state">—</span>
+      </div>
+
+      <div class="seg" role="radiogroup" aria-label="Stream type">
+        <button type="button" role="radio" class="seg-b" id="s-type-file" aria-checked="true" data-kind="file">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 2.5h6.5L15 6v11.5H5z"></path><path d="M8.5 9.5v5l4-2.5z"></path></svg>
+          Video file
+        </button>
+        <button type="button" role="radio" class="seg-b" id="s-type-rtsp" aria-checked="false" data-kind="rtsp">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="5" width="11" height="10" rx="2"></rect><path d="M13.5 9l4-2.5v7l-4-2.5"></path></svg>
+          RTSP camera
+        </button>
+      </div>
+
+      <label class="s-label" for="s-input" id="s-label">Video file path</label>
+      <input id="s-input" class="s-input" name="source" type="text" spellcheck="false" autocapitalize="off"
+             maxlength="1024" aria-describedby="s-hint s-err">
+      <p class="s-hint" id="s-hint"></p>
+      <p class="s-err" id="s-err" role="alert" hidden></p>
+      <p class="s-ok" id="s-ok" role="status" hidden></p>
+
+      <div class="s-actions">
+        <button type="button" id="s-default" class="linkbtn">Use default camera</button>
+        <span class="s-spacer"></span>
+        <button type="button" id="s-cancel" class="btn btn-ghost">Cancel</button>
+        <button type="submit" id="s-submit" class="btn btn-accent">Start stream</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Licence activation ----------------------------------------------------------------------------->
+  <dialog id="licdlg" class="streamdlg setdlg" aria-labelledby="lic-title">
+    <form id="licform" novalidate autocomplete="off">
+      <header class="s-head">
+        <div>
+          <span class="eyebrow">Licence</span>
+          <h2 id="lic-title">Activate this device</h2>
+        </div>
+        <button type="button" class="iconbtn" id="lic-close" aria-label="Close">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"></path></svg>
+        </button>
+      </header>
+
+      <div class="s-now">
+        <span class="s-now-k">Status</span>
+        <span class="s-now-v" id="lic-now">—</span>
+        <span class="chip chip-muted" id="lic-chip">—</span>
+      </div>
+
+      <span class="s-label">1. Send this machine ID to your supplier</span>
+      <div class="lic-mid">
+        <code id="lic-mid">—</code>
+        <button type="button" class="btn btn-sm" id="lic-copy">Copy</button>
+      </div>
+
+      <label class="s-label" for="lic-key">2. Paste the licence key you received</label>
+      <textarea id="lic-key" class="s-input lic-key" rows="4" spellcheck="false" autocapitalize="off"
+                placeholder="ANPR1-…"></textarea>
+      <p class="s-hint">The key works on every device it lists (one key for all your devices, or this device's own
+        key). The engine starts by itself a few seconds after activation. To renew or add devices, paste the new
+        key here. <span id="lic-admin" hidden>Activating needs the <b>admin password</b>.</span></p>
+      <p class="s-err" id="lic-err" role="alert" hidden></p>
+      <p class="s-ok" id="lic-ok" role="status" hidden></p>
+
+      <div class="s-actions">
+        <span class="s-spacer"></span>
+        <button type="button" id="lic-cancel" class="btn btn-ghost">Close</button>
+        <button type="submit" id="lic-activate" class="btn btn-accent">Activate</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Settings: client API ------------------------------------------------------------------------------>
+  <dialog id="setdlg" class="streamdlg setdlg" aria-labelledby="set-title">
+    <form id="setform" novalidate autocomplete="off">
+      <header class="s-head">
+        <div>
+          <span class="eyebrow">Settings</span>
+          <h2 id="set-title">Send plates to client API</h2>
+        </div>
+        <button type="button" class="iconbtn" id="set-close" aria-label="Close">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"></path></svg>
+        </button>
+      </header>
+
+      <div class="s-now">
+        <span class="s-now-k">Status</span>
+        <span class="s-now-v" id="set-now">—</span>
+        <span class="chip chip-muted" id="set-chip">—</span>
+      </div>
+
+      <label class="set-switch">
+        <input type="checkbox" id="set-enabled">
+        <span class="set-switch-ui" aria-hidden="true"></span>
+        <span>Send every new plate to the client's server</span>
+      </label>
+
+      <label class="s-label" for="set-url">API address (URL)</label>
+      <input id="set-url" class="s-input" type="url" spellcheck="false" autocapitalize="off" maxlength="2048"
+             placeholder="https://client-server.com/api/anpr/events">
+
+      <div class="set-grid">
+        <div>
+          <label class="s-label" for="set-hname">Key header name</label>
+          <input id="set-hname" class="s-input" type="text" spellcheck="false" autocapitalize="off" maxlength="64"
+                 placeholder="Authorization">
+        </div>
+        <div>
+          <label class="s-label" for="set-hvalue">API key</label>
+          <input id="set-hvalue" class="s-input" type="password" spellcheck="false" autocapitalize="off"
+                 maxlength="4096" autocomplete="new-password" placeholder="Bearer abc123…">
+        </div>
+      </div>
+
+      <div class="set-grid">
+        <div>
+          <label class="s-label" for="set-device">Device ID</label>
+          <input id="set-device" class="s-input" type="text" spellcheck="false" autocapitalize="off" maxlength="40">
+        </div>
+        <label class="set-check">
+          <input type="checkbox" id="set-images">
+          <span>Include photos (plate + vehicle)</span>
+        </label>
+      </div>
+
+      <div class="set-reply" id="set-reply" hidden>
+        <span class="set-reply-k">Last API response <span id="set-reply-when"></span></span>
+        <code id="set-reply-v"></code>
+      </div>
+
+      <p class="s-hint" id="set-hint">Each plate is sent as JSON with a POST request, in the format in
+        <code>docs/CLIENT_API_FORMAT.md</code>. You can change these settings at any time; they take effect in a few
+        seconds. Sending starts from the moment you switch it on or change the address.</p>
+      <p class="s-err" id="set-err" role="alert" hidden></p>
+      <p class="s-ok" id="set-ok" role="status" hidden></p>
+      <div class="set-resp" id="set-resp" hidden>
+        <span class="set-reply-k" id="set-resp-k">API response</span>
+        <code id="set-resp-v"></code>
+      </div>
+
+      <div class="s-actions">
+        <button type="button" id="set-test" class="btn btn-ghost">Send test</button>
+        <span class="s-spacer"></span>
+        <button type="button" id="set-cancel" class="btn btn-ghost">Cancel</button>
+        <button type="submit" id="set-save" class="btn btn-accent">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="admindlg" class="tokendlg">
+    <form method="dialog" id="adminform">
+      <h2>Admin password</h2>
+      <p id="admin-why">Changing this station (licence, settings, camera) needs the admin password
+        (<code>web.admin_token</code>). Viewing does not.</p>
+      <input id="admininput" type="password" autocomplete="current-password" required aria-label="Admin password">
+      <div class="dlg-actions">
+        <button value="cancel" formnovalidate class="btn btn-ghost">Cancel</button>
+        <button value="ok" class="btn btn-accent">Continue</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="tokendlg" class="tokendlg">
+    <form method="dialog" id="tokenform">
+      <h2>Access token required</h2>
+      <p>This station is protected. Enter the token set in <code>web.auth_token</code>.</p>
+      <input id="tokeninput" type="password" autocomplete="current-password" required>
+      <div class="dlg-actions">
+        <button value="cancel" formnovalidate class="btn btn-ghost">Cancel</button>
+        <button value="ok" class="btn btn-accent">Unlock</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

@@ -1,0 +1,28 @@
+[Unit]
+Description=ANPR web dashboard + API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=anpr
+Group=anpr
+WorkingDirectory=/opt/anpr
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/anpr/bin/anpr web --config /opt/anpr/config.yaml
+Restart=always
+RestartSec=3
+# The engine gets the CPU first; the dashboard is lighter and less urgent.
+Nice=5
+MemoryMax=200M
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/anpr/data
+
+[Install]
+WantedBy=multi-user.target

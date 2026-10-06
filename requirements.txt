@@ -1,0 +1,12 @@
+# Runtime dependencies — IDENTICAL on Mac (dev) and Raspberry Pi 3B+ (prod).
+# Every pin below is verified to ship wheels for BOTH macOS x86_64 and linux aarch64, Python 3.11.
+# Do not add packages here without checking both platforms (scripts/check_wheels.sh).
+ncnn==1.0.20260526
+onnxruntime==1.20.1
+opencv-python==4.11.0.86   # ncnn hard-depends on opencv-python (not headless); pin it so Mac and Pi match
+numpy==2.2.6
+fastapi==0.141.1
+uvicorn==0.54.0
+websockets==15.0.1   # uvicorn needs it for /ws/plates live updates (pure-Python wheel, same on Mac and Pi)
+pydantic==2.11.7
+pyyaml==6.0.2

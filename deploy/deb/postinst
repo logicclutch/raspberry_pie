@@ -1,0 +1,98 @@
+#!/bin/sh
+# anpr .deb: set up the service user, config, data folder and start the services.
+# Keeps the device's own config.yaml, licence.json and data/ on upgrades.
+set -e
+APP=/opt/anpr
+
+[ "$1" = "configure" ] || exit 0
+
+id anpr >/dev/null 2>&1 || useradd --system --home-dir "$APP" --no-create-home --shell /usr/sbin/nologin anpr
+# video: Pi camera + hardware H.264 decoder /dev/video10; render: /dev/dri (only if the group exists).
+for g in video render; do
+  if getent group "$g" >/dev/null; then usermod -aG "$g" anpr; fi
+done
+
+install -d -o anpr -g anpr -m 750 "$APP/data"
+# Activate saves licence.json next to config.yaml (temp file + rename), so anpr must own the folder.
+chown anpr:anpr "$APP"
+
+[ -f "$APP/config.yaml" ] || cp "$APP/config.default.yaml" "$APP/config.yaml"
+# Admin password (Activate licence, Settings, Add stream): created once and kept on upgrades.
+NEW_ADMIN=""
+if grep -qE '^  admin_token: null' "$APP/config.yaml"; then
+  NEW_ADMIN=$("$APP/.venv/bin/python" -c 'import secrets; print(secrets.token_urlsafe(12))')
+  sed -i -E "s|^  admin_token: null.*|  admin_token: $NEW_ADMIN   # admin password (Activate / Settings / Add stream)|" "$APP/config.yaml"
+elif ! grep -qE '^  admin_token:' "$APP/config.yaml"; then
+  NEW_ADMIN=$("$APP/.venv/bin/python" -c 'import secrets; print(secrets.token_urlsafe(12))')
+  sed -i -E "s|^(  auth_token:.*)$|\1\n  admin_token: $NEW_ADMIN   # admin password (Activate / Settings / Add stream)|" "$APP/config.yaml"
+fi
+chown anpr:anpr "$APP/config.yaml"
+chmod 640 "$APP/config.yaml"
+[ ! -f "$APP/licence.json" ] || chown anpr:anpr "$APP/licence.json"
+
+# Older script installs (deploy/install_pi.sh) put the units in /etc/systemd/system, which would
+# hide the packaged ones in /lib/systemd/system.
+for s in anpr-engine anpr-web; do
+  f=/etc/systemd/system/$s.service
+  if [ -f "$f" ] && grep -q 'ExecStart=/opt/anpr/.venv/bin/python' "$f"; then rm -f "$f"; fi
+done
+
+# Which anpr services are installed decides the mode: ingest receiver, camera engine, or +dashboard.
+has_svc() { [ -f "/lib/systemd/system/$1.service" ] || [ -f "/etc/systemd/system/$1.service" ]; }
+if has_svc anpr-ingest; then MODE=ingest; MAIN=anpr-ingest
+else MODE=camera; MAIN=anpr-engine; fi
+
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload
+  # Enable/restart every installed anpr service, but respect web.enabled (false -> dashboard off).
+  for s in anpr-ingest anpr-engine anpr-web; do
+    has_svc "$s" || continue
+    if [ "$s" = "anpr-web" ]; then
+      WEB_ENABLED=$("$APP/.venv/bin/python" - "$APP/config.yaml" <<'PY' 2>/dev/null || echo True
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+print((d.get("web") or {}).get("enabled", True))
+PY
+)
+      if [ "$WEB_ENABLED" = "False" ]; then
+        systemctl disable --now anpr-web >/dev/null 2>&1 || true
+        continue
+      fi
+    fi
+    systemctl enable "$s" >/dev/null 2>&1 || true
+    systemctl restart "$s" || true
+  done
+fi
+
+IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+DEVID=$("$APP/bin/anpr" engine --machine-id 2>/dev/null || echo '?')
+echo ""
+echo "ANPR $(cat "$APP/VERSION") installed in $APP"
+echo "  device ID:  $DEVID  (send it to the supplier for the licence)"
+if [ "$MODE" = "ingest" ]; then
+  PORT=$("$APP/.venv/bin/python" - "$APP/config.yaml" <<'PY' 2>/dev/null || echo 8080
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+print((d.get("ingest") or {}).get("port", 8080))
+PY
+)
+  echo "  mode:       INGEST (the ANPR camera POSTs images here). No dashboard, no RTSP."
+  echo "  camera ->   http://${IP:-<pi-ip>}:${PORT}/api/v1/ingest   (set this as the camera's HTTP upload URL)"
+  echo "  results ->  the API set in $APP/config.yaml (push:)"
+  echo "  licence:    sudo $APP/bin/anpr ingest --activate 'ANPR1-...'   (or copy licence.json into $APP/)"
+elif has_svc anpr-web; then
+  echo "  dashboard:  http://${IP:-<pi-ip>}:8000"
+  echo "  licence:    open the dashboard and paste the licence key (Activate)"
+  if [ -n "$NEW_ADMIN" ]; then
+    echo "  admin pass: $NEW_ADMIN   (also in $APP/config.yaml, web.admin_token)"
+  else
+    echo "  admin pass: unchanged (sudo grep admin_token $APP/config.yaml)"
+  fi
+else
+  echo "  mode:       HEADLESS (no dashboard). Plates are sent to the API set in $APP/config.yaml (push:)."
+  echo "  licence:    sudo $APP/bin/anpr engine --activate 'ANPR1-...'   (or copy licence.json into $APP/)"
+  echo "  camera/API: edit $APP/config.yaml, then: sudo systemctl restart anpr-engine"
+fi
+echo "  check:      sudo $APP/deploy/pi_check.sh"
+echo "  logs:       journalctl -u $MAIN -f"
+exit 0

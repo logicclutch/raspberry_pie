@@ -1,0 +1,25 @@
+#!/bin/sh
+# ANPR command (compiled program in /opt/anpr/lib):
+#   anpr engine [--config FILE] [--machine-id | --check-licence | ...]
+#   anpr web    [--config FILE] [--host H] [--port P]
+#   anpr probe-camera '<rtsp link>' [--guess-main]
+#   anpr version
+APP=/opt/anpr
+cmd=${1:-}
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  engine)        mod=anpr.engine ;;
+  web)           mod=anpr.web.__main__ ;;
+  ingest)        mod=anpr.ingest ;;
+  probe-camera)  mod=probe_camera ;;
+  version)       cat "$APP/VERSION"; exit 0 ;;
+  *) echo "usage: anpr engine|web|ingest|probe-camera|version [options]   (add --help for options)" >&2; exit 2 ;;
+esac
+cd "$APP" || exit 1
+exec "$APP/.venv/bin/python" -s -c "
+import sys
+sys.path.insert(0, '$APP/lib')
+sys.argv[0] = 'anpr $cmd'
+import importlib
+sys.exit(importlib.import_module('$mod').main())
+" "$@"

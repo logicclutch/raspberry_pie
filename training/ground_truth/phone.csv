@@ -1,0 +1,11 @@
+# Ground truth for the phone test video (1920x1080, 30 fps, 6 plates, straight-on).
+# ORIGIN: the plate list given with the task (read by eye, NOT verified by the customer). All 6 are clear.
+# tracks: tracker ids of a run on every frame (training/data/labels.csv `track`, source phone), matched to the
+#   plates by order of appearance; frame spans are left empty (all plates are sure, so none are needed).
+video,vehicle,plate,status,first_frame,last_frame,tracks,note
+/Users/ibm/Desktop/Anpr 2/IMG_1565.mp4,1,UP16DY0772,sure,,,1,
+/Users/ibm/Desktop/Anpr 2/IMG_1565.mp4,2,UP16DQ9256,sure,,,2,
+/Users/ibm/Desktop/Anpr 2/IMG_1565.mp4,3,UP16CD2971,sure,,,3,
+/Users/ibm/Desktop/Anpr 2/IMG_1565.mp4,4,DL2CAZ2022,sure,,,4,
+/Users/ibm/Desktop/Anpr 2/IMG_1565.mp4,5,HR55BB4560,sure,,,5,
+/Users/ibm/Desktop/Anpr 2/IMG_1565.mp4,6,HR51CQ0695,sure,,,6,

@@ -1,0 +1,56 @@
+{
+  "name": "smoke-20260929",
+  "created": "2026-09-29T13:29:31+05:30",
+  "git": null,
+  "data": "/private/tmp/claude-501/-Users-ibm-Desktop-raspberry-main/d48a2d3d-bc02-494d-a53f-0b4ea15b9f33/scratchpad/smoke_data",
+  "run_dir": "/Users/ibm/Desktop/raspberry-main/training/runs/smoke-20260929",
+  "base_checkpoint": "cct_xs_v2_global.keras (sha256 0716717772b1f8d2...)",
+  "train_sources": [
+    "phone",
+    "synth"
+  ],
+  "val_sources": [
+    "synth"
+  ],
+  "test_sources": [
+    "gate_cam"
+  ],
+  "train_videos": [
+    "/Users/ibm/Desktop/Anpr 2/IMG_1565.mp4",
+    "synth:seed7"
+  ],
+  "val_videos": [
+    "synth:seed7"
+  ],
+  "test_videos": [
+    "/Users/ibm/Desktop/raspberry-main/vlc-record-2026-09-28-14h52m53s-rtsp___192.168.5.53_554_avstream_channel=1_stream=1.sdp-.mp4"
+  ],
+  "test_csv": "/Users/ibm/Desktop/raspberry-main/training/runs/smoke-20260929/splits/test.csv",
+  "counts": {
+    "train": {
+      "crops": 557,
+      "vehicles": 539,
+      "two_line": 207,
+      "per_source": {
+        "phone": 24,
+        "synth": 533
+      }
+    },
+    "val": {
+      "crops": 67,
+      "vehicles": 67,
+      "two_line": 25,
+      "per_source": {
+        "synth": 67
+      }
+    },
+    "test": {
+      "crops": 72,
+      "vehicles": 18,
+      "two_line": 23,
+      "per_source": {
+        "gate_cam": 72
+      }
+    }
+  }
+}

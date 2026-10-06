@@ -1,0 +1,21 @@
+description: Ultralytics YOLO11n model trained on /content/drive/MyDrive/Colab Notebooks/Computer
+  Vision Workshop/LPR Detection/License-Plate-Recognition-11/data.yaml
+author: Ultralytics
+date: '2026-09-29T10:50:58.748010+05:30'
+version: 8.4.165
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+head: Detect
+batch: 1
+imgsz:
+- 320
+- 320
+names:
+  0: License_Plate
+args:
+  batch: 1
+  quantize: null
+channels: 3
+end2end: false

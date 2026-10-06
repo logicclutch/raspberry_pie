@@ -1,0 +1,14 @@
+Package: anpr
+Version: @VERSION@
+Architecture: arm64
+Maintainer: LogicClutch <ankit@logicclutch.com>
+Section: misc
+Priority: optional
+Installed-Size: @SIZE@
+Depends: @PYDEP@, libgl1, libglib2.0-0, ffmpeg, sqlite3, curl, passwd
+Recommends: rpicam-apps
+Description: Indian number plate recognition (ANPR) for Raspberry Pi 3B+
+ Reads number plates from a camera or RTSP stream, stores them in SQLite and
+ serves a web dashboard + API on port 8000. Includes its own Python
+ environment, so no internet or pip is needed on the Pi.
+ Needs Raspberry Pi OS 64-bit and a licence for the device.

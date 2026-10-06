@@ -1,0 +1,122 @@
+# ANPR INGEST settings on the Raspberry Pi: /opt/anpr/config.yaml
+# The ANPR camera (e.g. GVD) POSTs its vehicle image(s) (base64 JSON) to this Pi; the Pi reads the
+# plate, replies with it, and sends the result to the client API (push:). No RTSP/video is used.
+# Kept on updates (the installer never overwrites it). After editing: sudo systemctl restart anpr-ingest
+# Relative paths resolve against this file's folder (/opt/anpr).
+# camera: below is unused in ingest mode (the camera POSTs to us); it is kept only for a complete file.
+camera:
+  source: picamera      # picamera (Pi camera module) or rtsp://USER:PASSWORD@CAMERA-IP:554/... (H.264 main stream)
+  width: 1280
+  height: 720
+  fps: 15
+  realtime: true
+  exposure_us: 1000
+  decode_threads: 2
+  # RTSP decoding on the Pi 3B+: system ffmpeg + the Pi's hardware H.264 decoder (docs/CAMERA_SETUP.md).
+  backend: ffmpeg       # opencv | ffmpeg (system ffmpeg; Pi hardware H.264 decoder)
+  hw_decode: auto       # auto | off | v4l2m2m | videotoolbox (backend ffmpeg only)
+  max_fps: 8            # live streams + realtime videos: extra frames dropped before conversion; 0 = all
+  output_width: 1280    # e.g. 1280: shrink wider pictures (1920x1080 -> 1280x720); null = keep size
+# TWO CAMERAS on this one Pi (quiet/medium gate only). Uncomment and set both sources; each plate's
+# JSON then carries its camera's name. All other settings above (fps, backend, resolution...) are shared.
+# cameras:
+#   - {source: 'rtsp://user:pass@CAM1-IP:554/Streaming/Channels/101', name: entry}
+#   - {source: 'rtsp://user:pass@CAM2-IP:554/Streaming/Channels/101', name: exit}
+
+motion:
+  enabled: true
+  downscale_width: 160
+  pixel_threshold: 25
+  min_changed_ratio: 0.002
+detector:
+  backend: ncnn
+  model_path: models/detector/plate_det_ncnn_model
+  input_size: 320
+  conf_threshold: 0.5
+  iou_threshold: 0.45
+  num_threads: 4
+  class_ids: null
+ocr:
+  model_path: models/ocr/plate_ocr.onnx
+  config_path: models/ocr/plate_ocr_config.yaml
+  num_threads: 4
+  max_plates_per_frame: 3
+crop:
+  padding: 0.08
+  min_width_px: 40   # 704x576 gate camera: 2-line plates are only 44-66 px wide
+  min_sharpness: 60.0
+  clahe_clip: 2.0
+  deskew: false   # true only for cameras at very steep angles; test with scripts/eval_accuracy.py
+  deshear: true   # side-mounted camera: straighten slanted 1-line plates
+  retry_expand: 0.10  # read failed the format check -> re-read once from a 10% wider box (0 = off)
+validation:
+  min_char_conf: 0.6
+  allow_bh: true
+tracking:
+  iou_match: 0.3
+  max_age_s: 3.0
+vote:
+  # INGEST tuning: the ANPR camera sends only 1-2 images per vehicle (not a video stream), so a single
+  # deliberate capture must count. min_votes/end_min_votes are therefore 1 here (for a live RTSP camera
+  # they would be 3/2). Accuracy is kept by min_char_conf + the plate-format validator; when the camera
+  # does send several images they still vote and the majority wins.
+  min_votes: 1
+  min_avg_conf: 0.85
+  min_agreement: 0.7
+  dedupe_window_s: 60.0
+  end_min_votes: 1
+  end_min_conf: 0.95
+  close_ratio: 0.85    # only reads from plates >= 85% of the largest seen on that vehicle vote
+  settle_s: 1.0        # decide once the plate stopped growing for 1 s (vehicle close/stopped) or left
+  settle_growth: 0.05
+hsrp:
+  # Mark each saved plate HSRP / Non-HSRP / Not sure (hologram + "IND" left of the number).
+  # 2-line plates and plates too small or blurred to judge show "Not sure".
+  enabled: true
+  min_marked: 2
+  min_clean: 3
+  unsure_as_non_hsrp: true  # only plates where the mark is seen count as HSRP
+  two_line: false  # also judge 2-line plates; turn on only with a clear, close (ideally colour) camera view
+push:
+  # Send every confirmed plate to the client's server. When this section is here it is the source of
+  # truth: these values are applied on every restart (edit the file, then restart). Remove the whole
+  # section to manage sending from the dashboard Settings page instead.
+  enabled: true                  # true = send plates to the API below
+  url: 'http://192.168.1.72:21300/lane/anpr'   # the client's DB API (change if the server IP/port differs)
+  header_name: Authorization     # name of the key/token header; '' = send no key header
+  header_value: ''               # the key/token value, e.g. 'Bearer abc123'; '' = none (set if your API needs one)
+  device_id: ''                  # how this Pi is named in the JSON; '' = the Pi's hostname
+  include_images: true           # include the plate snapshot (base64) in each record
+ingest:
+  enabled: true                  # turn on the "camera POSTs images to us" receiver
+  host: 0.0.0.0
+  port: 8080                     # the camera POSTs to  http://<pi-ip>:8080/api/v1/ingest
+  path: /api/v1/ingest
+  token: ''                      # if set, the camera must send header  X-Ingest-Token: <token>
+  image_field: ''                # '' = find the base64 image automatically; or set the camera's field, e.g. data.image
+  vehicle_id_field: ''           # optional JSON field to echo back / forward (e.g. vehicleId)
+  camera_field: ''               # optional JSON field naming the camera/lane (stored as the plate's camera)
+  max_body_mb: 12.0
+  respond_with_plate: true       # return the read plate in the HTTP response (each POST = one whole vehicle,
+                                 # e.g. GVD BgImg+PlateImg together). false = reply with an ack only and
+                                 # group one-image-per-POST cameras by time. Plate is pushed to the API either way.
+
+storage:
+  db_path: data/anpr.db
+  image_dir: data/images
+  retention_days: 30.0
+  snapshot_width: 640
+web:
+  enabled: false        # headless: no dashboard/API is run at all (plates still go to the client API)
+  station_name: Gate 1
+  host: 0.0.0.0
+  port: 8000
+  auth_token: null
+  admin_token: null   # admin password for Activate / Settings / Add stream (the Pi installer sets one)
+runtime:
+  max_rss_mb: 850.0         # headless frees the dashboard's RAM; room for up to two cameras
+  status_interval_s: 2.0
+  preview_interval_s: 0     # headless: no dashboard, so no live-view pictures are made
+  preview_width: 640
+  preview_quality: 70
+  log_level: INFO

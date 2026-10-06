@@ -1,0 +1,21 @@
+[project]
+name = "anpr"
+version = "0.1.0"
+requires-python = ">=3.11,<3.12"
+description = "Strict Indian-plate ANPR for Raspberry Pi 3B+ (developed on macOS, identical code on both)"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+markers = [
+  "models: needs real model files under models/ (skipped when absent)",
+  "slow: slower integration tests",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "B", "UP", "SIM"]

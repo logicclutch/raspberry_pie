@@ -1,0 +1,30 @@
+[Unit]
+Description=ANPR ingest receiver (camera POSTs images -> plate -> client API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=anpr
+Group=anpr
+WorkingDirectory=/opt/anpr
+Environment=PYTHONUNBUFFERED=1
+Environment=OMP_NUM_THREADS=4
+ExecStart=/opt/anpr/bin/anpr ingest --config /opt/anpr/config.yaml
+Restart=always
+RestartSec=3
+# No video decoding in this mode, so it is lighter than the camera engine. 1 GB Pi 3B+.
+MemoryMax=700M
+# Room for a clean stop while the plate sender finishes a request (10 s API timeout) and the
+# database is closed; a kill could re-send the last batch.
+TimeoutStopSec=25
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/anpr/data
+
+[Install]
+WantedBy=multi-user.target

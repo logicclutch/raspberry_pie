@@ -1,0 +1,12 @@
+#!/bin/sh
+# remove: keeps config.yaml, licence.json and data/ (plates). purge: deletes them and the anpr user.
+set -e
+APP=/opt/anpr
+[ ! -d /run/systemd/system ] || systemctl daemon-reload >/dev/null 2>&1 || true
+if [ "$1" = "purge" ]; then
+  rm -rf "$APP/data" "$APP/config.yaml" "$APP/licence.json" "$APP"/.licence-*.tmp
+  find "$APP" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+  rmdir "$APP" 2>/dev/null || true
+  if id anpr >/dev/null 2>&1; then userdel anpr >/dev/null 2>&1 || true; fi
+fi
+exit 0

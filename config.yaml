@@ -1,0 +1,95 @@
+# ANPR config — the SAME file works on Mac (dev) and Raspberry Pi 3B+ (prod).
+# Mac: camera.source "0" (webcam) or a video path. Pi: "picamera" or rtsp://...
+# Relative paths resolve against this file's folder.
+camera:
+  source: '0'
+  width: 1280
+  height: 720
+  fps: 15
+  realtime: true
+  exposure_us: 1000
+  decode_threads: 2
+  # RTSP/video decoding. opencv = today's behaviour (Mac default). Pi 3B+ with the camera's 1080p/720p
+  # MAIN stream: backend ffmpeg, hw_decode auto, max_fps 10, output_width 1280 (docs/CAMERA_SETUP.md).
+  backend: opencv       # opencv | ffmpeg (system ffmpeg; Pi hardware H.264 decoder)
+  hw_decode: auto       # auto | off | v4l2m2m | videotoolbox (backend ffmpeg only)
+  max_fps: 10           # live streams + realtime videos: extra frames dropped before conversion; 0 = all
+  output_width: null    # e.g. 1280: shrink wider pictures (1920x1080 -> 1280x720); null = keep size
+motion:
+  enabled: true
+  downscale_width: 160
+  pixel_threshold: 25
+  min_changed_ratio: 0.002
+detector:
+  backend: ncnn
+  model_path: models/detector/plate_det_ncnn_model
+  input_size: 320
+  conf_threshold: 0.5
+  iou_threshold: 0.45
+  num_threads: 4
+  class_ids: null
+ocr:
+  model_path: models/ocr/plate_ocr.onnx
+  config_path: models/ocr/plate_ocr_config.yaml
+  num_threads: 4
+  max_plates_per_frame: 3
+crop:
+  padding: 0.08
+  min_width_px: 40   # 704x576 gate camera: 2-line plates are only 44-66 px wide
+  min_sharpness: 60.0
+  clahe_clip: 2.0
+  deskew: false   # true only for cameras at very steep angles; test with scripts/eval_accuracy.py
+  deshear: true   # side-mounted camera: straighten slanted 1-line plates
+  retry_expand: 0.10  # read failed the format check -> re-read once from a 10% wider box (0 = off)
+validation:
+  min_char_conf: 0.45
+  allow_bh: true
+tracking:
+  iou_match: 0.3
+  max_age_s: 3.0
+vote:
+  min_votes: 3
+  min_avg_conf: 0.85
+  min_agreement: 0.7
+  dedupe_window_s: 60.0
+  end_min_votes: 2
+  end_min_conf: 0.95
+  close_ratio: 0.85    # only reads from plates >= 85% of the largest seen on that vehicle vote
+  settle_s: 1.0        # decide once the plate stopped growing for 1 s (vehicle close/stopped) or left
+  settle_growth: 0.05
+hsrp:
+  # Mark each saved plate HSRP / Non-HSRP / Not sure (hologram + "IND" left of the number).
+  # 2-line plates and plates too small or blurred to judge show "Not sure".
+  enabled: true
+  min_marked: 2
+  min_clean: 3
+  unsure_as_non_hsrp: true  # only plates where the mark is seen count as HSRP
+  two_line: false  # also judge 2-line plates; turn on only with a clear, close (ideally colour) camera view
+push:
+  # Send every confirmed plate to the client's server. When this section is here it is the source of
+  # truth: these values are applied on every restart (edit the file, then restart). Remove the whole
+  # section to manage sending from the dashboard Settings page instead.
+  enabled: false                 # true = send plates to the API below
+  url: ''                        # e.g. https://demo.intelliparks.in/api/deviceAPI/ANPRLogInsert
+  header_name: Authorization     # name of the key/token header; '' = send no key header
+  header_value: ''               # the key/token value, e.g. 'Bearer abc123'; '' = none
+  device_id: ''                  # how this Pi is named in the JSON; '' = the Pi's hostname
+  include_images: true           # include the plate snapshot (base64) in each record
+storage:
+  db_path: data/anpr.db
+  image_dir: data/images
+  retention_days: 30.0
+  snapshot_width: 640
+web:
+  station_name: Gate 1
+  host: 0.0.0.0
+  port: 8000
+  auth_token: null
+  admin_token: null   # admin password for Activate / Settings / Add stream (the Pi installer sets one)
+runtime:
+  max_rss_mb: 600.0
+  status_interval_s: 2.0
+  preview_interval_s: 1.0   # dashboard Live view: seconds between pictures (0 = off)
+  preview_width: 640
+  preview_quality: 70
+  log_level: INFO

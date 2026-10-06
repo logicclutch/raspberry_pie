@@ -1,0 +1,31 @@
+[Unit]
+Description=ANPR engine (camera -> plates -> SQLite)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=anpr
+Group=anpr
+# video: Pi camera (rpicam-vid) AND the hardware H.264 decoder /dev/video10 used by camera.backend ffmpeg
+# (h264_v4l2m2m); render: /dev/dri. ffmpeg runs as a child of this service: its memory counts in MemoryMax.
+SupplementaryGroups=video render
+WorkingDirectory=/opt/anpr
+Environment=PYTHONUNBUFFERED=1
+Environment=OMP_NUM_THREADS=4
+ExecStart=/opt/anpr/bin/anpr engine --config /opt/anpr/config.yaml
+Restart=always
+RestartSec=3
+# The Pi 3B+ has 1 GB. The engine also exits by itself above runtime.max_rss_mb; this is the hard stop.
+MemoryMax=750M
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/anpr/data
+
+[Install]
+WantedBy=multi-user.target

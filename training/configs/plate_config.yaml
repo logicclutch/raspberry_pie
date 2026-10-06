@@ -1,0 +1,14 @@
+# fast-plate-ocr plate config for the Indian fine-tune.
+# Same as the deployed models/ocr/plate_ocr_config.yaml (cct_xs_v2_global) MINUS `plate_regions`:
+# without regions the trainer builds no region head, so our CSVs need no plate_region column and the
+# pretrained plate head / alphabet (37 = 36 chars + pad) load unchanged (135/137 tensors; the 2 skipped
+# are fixed blur kernels). Do NOT change alphabet, img size or colour mode: that breaks weight reuse.
+# max_plate_slots 10 covers every plate except Delhi 11-char DL NN C XX NNNN (see RESEARCH.md).
+max_plate_slots: 10
+alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_
+pad_char: _
+img_height: 64
+img_width: 128
+keep_aspect_ratio: false
+interpolation: linear
+image_color_mode: rgb  # anpr/ocr.py turns the gray camera crop into RGB, like training does

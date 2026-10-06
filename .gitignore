@@ -1,0 +1,29 @@
+.venv/
+.venv-train/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+data/
+models/dev/
+*.pt
+training/pretrained/
+trained_models/
+training/runs/
+config.demo.yaml
+
+# --- not for git ---
+.DS_Store
+*.egg-info/
+.tmp_cfg_*.yaml
+# secrets / per-machine files
+config.demo.admin.yaml
+licence.json
+# build output (.deb, install guide) - rebuild with deploy/build_deb.sh
+dist/
+# training images and labels (455 MB, real vehicles)
+training/data/
+# real customer photos / camera recordings
+/WhatsApp*
+/vlc-record-*
+*.mp4
+.claude/

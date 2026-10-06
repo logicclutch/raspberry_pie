@@ -1,0 +1,18 @@
+# Training only: .venv-train on the Mac, or a Colab runtime. NEVER the locked runtime .venv.
+#   Mac:   .venv-train/bin/pip install -r training/requirements-train.txt
+#   Colab: pip install -r training/requirements-train.txt   (keeps Colab's own TensorFlow)
+fast-plate-ocr[train,onnx]==1.1.0
+albumentations==2.0.8
+tf2onnx==1.17.0
+onnxslim==0.1.97
+
+# Intel macOS (verified together, Python 3.11): TF 2.16.2 is the last TF with Intel-mac wheels and pins
+# ml-dtypes~=0.3.1; onnx>=1.18 then crashes the export (ml_dtypes has no float4_e2m1fn).
+tensorflow==2.16.2; sys_platform == "darwin"
+keras==3.15.1; sys_platform == "darwin"
+onnx==1.17.0; sys_platform == "darwin"
+
+# Linux / Colab (NOT verified yet): keep the preinstalled TensorFlow (GPU build). Its newer ml-dtypes has
+# float4_e2m1fn, so a newer onnx is fine there. If the export still fails, try: pip install "onnx==1.17.0"
+onnx>=1.17,<1.20; sys_platform == "linux"
+

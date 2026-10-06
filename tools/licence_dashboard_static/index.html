@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="no-referrer">
+  <title>Licence Manager · LogicClutch Software LLP</title>
+  <link rel="icon" type="image/png" href="/logo.png">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <span class="topbar-glow" aria-hidden="true"></span>
+    <div class="brand">
+      <img src="/logo.png" alt="LogicClutch" width="40" height="40">
+      <div class="brand-text">
+        <span class="brand-name">Licence Manager</span>
+        <span class="brand-sub">LogicClutch Software LLP · ANPR</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="chip" id="keychip">Checking signing key…</span>
+      <span class="chip chip-local" title="Runs on this computer only. Never share or publish it.">This computer only</span>
+    </div>
+  </header>
+
+  <div class="alert" id="alert" role="alert" hidden></div>
+
+  <main class="shell">
+    <!-- New licence --------------------------------------------------------------------------------->
+    <section class="panel" aria-labelledby="new-title">
+      <header class="panel-head">
+        <div>
+          <span class="eyebrow">Step 1</span>
+          <h2 id="new-title">New licence for a customer</h2>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" id="clear">Clear</button>
+      </header>
+      <form id="form" class="form" novalidate autocomplete="off">
+        <label class="lbl" for="customer">Customer name</label>
+        <input id="customer" class="input" maxlength="120" placeholder="e.g. Acme Logistics, Jaipur" required>
+
+        <div class="lbl-row">
+          <label class="lbl" for="machines">Machine IDs</label>
+          <span class="count" id="count" aria-live="polite">0 machines</span>
+        </div>
+        <textarea id="machines" class="input mono" rows="7" spellcheck="false"
+                  placeholder="Paste the machine IDs the customer sent, one per line&#10;00000000a1b2c3d4   # Gate 1&#10;00000000b5c6d7e8   # Gate 2"></textarea>
+        <p class="hint">One per line, or separated by commas or spaces. Text after <code>#</code> is a label for that
+          machine (e.g. gate name). Duplicates are counted once.</p>
+
+        <span class="lbl">Key type</span>
+        <div class="ktype" role="radiogroup" aria-label="Key type" id="keytype">
+          <button type="button" role="radio" data-k="customer" aria-checked="true">
+            <b>One key for all machines</b>
+            <span>The customer pastes the same key on every device. Simplest.</span>
+          </button>
+          <button type="button" role="radio" data-k="machine" aria-checked="false">
+            <b>One key per machine</b>
+            <span>A short key for each device, downloadable as an Excel/CSV list.</span>
+          </button>
+        </div>
+
+        <span class="lbl">Valid for</span>
+        <div class="seg" role="radiogroup" aria-label="Valid for" id="validity">
+          <button type="button" role="radio" data-v="1y" aria-checked="true">1 year</button>
+          <button type="button" role="radio" data-v="2y" aria-checked="false">2 years</button>
+          <button type="button" role="radio" data-v="3y" aria-checked="false">3 years</button>
+          <button type="button" role="radio" data-v="date" aria-checked="false">Until date…</button>
+          <button type="button" role="radio" data-v="never" aria-checked="false">No end date</button>
+        </div>
+        <div class="date-row" id="date-row" hidden>
+          <label class="lbl" for="expires">Last valid day</label>
+          <input id="expires" class="input" type="date">
+        </div>
+        <p class="hint" id="valid-hint"></p>
+
+        <label class="lbl" for="note">Note <span class="opt">(optional, e.g. order number)</span></label>
+        <input id="note" class="input" maxlength="500" placeholder="PO 4512">
+
+        <p class="err" id="form-err" role="alert" hidden></p>
+        <div class="actions">
+          <button type="submit" class="btn btn-accent" id="generate">Generate licence key</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Result -------------------------------------------------------------------------------------->
+    <section class="panel result is-empty" id="result" aria-labelledby="res-title">
+      <header class="panel-head">
+        <div>
+          <span class="eyebrow">Step 2 · give this to the customer</span>
+          <h2 id="res-title">Licence key</h2>
+        </div>
+        <span class="chip chip-ok" id="res-chip" hidden>Signed</span>
+      </header>
+      <ol class="howto" id="res-empty">
+        <li><b>The customer installs the software</b> on each device. The device shows its <b>machine ID</b>
+          on the dashboard (Activate).</li>
+        <li><b>They send you all their machine IDs.</b> Paste them on the left, pick the key type and how long it
+          is valid, and press <b>Generate</b>.</li>
+        <li><b>The key(s) appear here.</b> One key for all machines: copy it. One key per machine: download the
+          Excel/CSV list. Send it to the customer (e-mail or WhatsApp).</li>
+        <li><b>They paste the key on the device</b> → Activate. Each device checks that its own machine ID is in the
+          key and starts within seconds.</li>
+      </ol>
+      <div class="res-body" id="res-full" hidden>
+        <dl class="facts" id="res-facts"></dl>
+        <div id="res-many" hidden>
+          <div class="actions actions-top">
+            <button type="button" class="btn btn-accent" id="res-csv">Download all keys (Excel)</button>
+            <button type="button" class="btn" id="res-csv2">CSV</button>
+            <span class="muted" id="res-many-n"></span>
+          </div>
+          <div class="table-wrap keys-wrap">
+            <table class="table keys">
+              <thead><tr><th>Machine ID</th><th>Label</th><th>Licence key</th><th class="act"><span class="sr">Copy</span></th></tr></thead>
+              <tbody id="res-keys"></tbody>
+            </table>
+          </div>
+          <p class="hint">Each device needs <b>its own key</b>: the customer pastes the key on the row of that
+            machine ID, on that device → <b>Activate</b>.</p>
+        </div>
+        <div class="keybox" id="res-one">
+          <textarea id="res-key" class="input mono key" rows="4" readonly aria-label="Licence key"></textarea>
+          <div class="actions">
+            <button type="button" class="btn btn-accent" id="res-copy">Copy licence key</button>
+            <a class="btn" id="res-file" download="licence.json">Download licence.json</a>
+          </div>
+          <p class="hint">The customer pastes this <b>same key</b> on every one of their devices: dashboard →
+            <b>Activate</b>. Each device checks that its own machine ID is in the key.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Issued licences ----------------------------------------------------------------------------->
+    <section class="panel" aria-labelledby="list-title">
+      <header class="panel-head">
+        <div>
+          <span class="eyebrow">Records</span>
+          <h2 id="list-title">Issued licences <span class="muted" id="list-count"></span></h2>
+        </div>
+        <input id="search" class="input input-sm" type="search" placeholder="Search customer, ID or machine" aria-label="Search licences">
+      </header>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Customer</th><th>Licence ID</th><th>Key type</th><th class="num">Machines</th><th>Issued</th>
+              <th>Valid until</th><th>Status</th><th class="act"><span class="sr">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <p class="empty" id="empty" hidden>No licences issued yet.</p>
+      </div>
+    </section>
+
+    <!-- Check a key ---------------------------------------------------------------------------------->
+    <section class="panel" aria-labelledby="check-title">
+      <header class="panel-head">
+        <div>
+          <span class="eyebrow">Support</span>
+          <h2 id="check-title">Check a licence key</h2>
+        </div>
+      </header>
+      <form id="checkform" class="form" novalidate autocomplete="off">
+        <label class="lbl" for="check-key">Licence key (or licence.json text)</label>
+        <textarea id="check-key" class="input mono" rows="3" spellcheck="false" placeholder="ANPR1-…"></textarea>
+        <label class="lbl" for="check-machine">Machine ID <span class="opt">(optional: is it valid for this machine?)</span></label>
+        <input id="check-machine" class="input mono" maxlength="80" placeholder="00000000a1b2c3d4">
+        <div class="actions"><button type="submit" class="btn">Check</button></div>
+        <div id="check-out" class="check-out" hidden></div>
+      </form>
+    </section>
+  </main>
+
+  <dialog id="detail" class="dlg" aria-labelledby="d-title">
+    <form method="dialog">
+      <header class="panel-head">
+        <div><span class="eyebrow" id="d-eyebrow">Licence</span><h2 id="d-title">—</h2></div>
+        <button class="btn btn-ghost btn-sm" value="close">Close</button>
+      </header>
+      <div class="res-body">
+        <dl class="facts" id="d-facts"></dl>
+        <div id="d-one">
+          <span class="lbl">Machines (<span id="d-mcount">0</span>)</span>
+          <pre class="machines mono" id="d-machines"></pre>
+          <span class="lbl">Licence key</span>
+          <textarea id="d-key" class="input mono key" rows="3" readonly aria-label="Licence key"></textarea>
+        </div>
+        <div id="d-many" hidden>
+          <span class="lbl">One key per machine (<span id="d-kcount">0</span>)</span>
+          <div class="table-wrap keys-wrap">
+            <table class="table keys">
+              <thead><tr><th>Machine ID</th><th>Label</th><th>Licence key</th><th class="act"><span class="sr">Copy</span></th></tr></thead>
+              <tbody id="d-keys"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="actions">
+          <button type="button" class="btn btn-accent" id="d-copy">Copy key</button>
+          <a class="btn" id="d-file" download="licence.json">Download licence.json</a>
+          <button type="button" class="btn btn-accent" id="d-csv" hidden>Download all keys (Excel)</button>
+          <button type="button" class="btn" id="d-csv2" hidden>CSV</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn" id="d-renew" title="New licence with the same customer and machines">Renew / add machines</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>
