@@ -11,6 +11,7 @@ from anpr.preprocess import (
     deskew,
     enhance,
     find_plate_quad,
+    plate_sharpness,
     prepare_plate,
     quad_is_plausible,
     sharpness,
@@ -108,6 +109,21 @@ def test_blurry_plate_fails_gate() -> None:
     assert sharpness(frame[box.y1 : box.y2, box.x1 : box.x2]) >= cfg.min_sharpness
     assert sharpness(blurred[box.y1 : box.y2, box.x1 : box.x2]) < cfg.min_sharpness
     assert prepare_plate(blurred, box, cfg) is None
+
+
+def test_big_zoomed_in_plate_passes_gate() -> None:
+    # a camera close-up / upscaled plate: the same sharp plate 5x bigger is still sharp, a blurred one is not
+    frame, box = scene_with_plate()
+    big = cv2.resize(frame, None, fx=5, fy=5, interpolation=cv2.INTER_CUBIC)
+    big_box = Box(box.x1 * 5, box.y1 * 5, box.x2 * 5, box.y2 * 5, box.score)
+    cfg = CropConfig()
+    assert (
+        sharpness(big[big_box.y1 : big_box.y2, big_box.x1 : big_box.x2]) < cfg.min_sharpness
+    )  # full size: looks blurred
+    assert plate_sharpness(big[big_box.y1 : big_box.y2, big_box.x1 : big_box.x2]) >= cfg.min_sharpness
+    assert prepare_plate(big, big_box, cfg) is not None
+    blurred = cv2.resize(cv2.GaussianBlur(frame, (0, 0), 6), None, fx=5, fy=5, interpolation=cv2.INTER_CUBIC)
+    assert prepare_plate(blurred, big_box, cfg) is None
 
 
 def test_tiny_box_fails_gate() -> None:

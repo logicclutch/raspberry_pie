@@ -63,7 +63,7 @@ def _event_to_dict(e: PlateEvent, duplicate: bool = False) -> dict:
         "plate": e.plate,
         "confidence": round(float(e.confidence), 3),
         "kind": e.kind,  # "standard" | "bh"
-        "hsrp": e.hsrp,  # "hsrp" | "non_hsrp" | "unsure" | None
+        "hsrp": e.hsrp,  # "hsrp" | "non_hsrp" | e.g. "not sure: text not found" | None
         "votes": e.votes,
         # true = read correctly, but the same plate was already recorded within vote.dedupe_window_s,
         # so it was not stored or sent again (e.g. the camera re-sent the vehicle)
@@ -230,10 +230,53 @@ def find_image_bytes(body: Any, field: str = "") -> bytes | None:
     return imgs[0] if imgs else None
 
 
-def decode_image(raw: bytes) -> np.ndarray | None:
+# Pictures are read at most this big (long side). ANPR cameras send <= 1080p; bigger pictures (12 MP phone
+# photos, 4K snapshots) are decoded straight at 1/2, 1/4 or 1/8 size by libjpeg and then shrunk: a 4000 x 3000
+# picture needs 9 MB instead of 36 MB, so a burst of big POSTs cannot push the Pi out of memory. The plate
+# in such a picture is still hundreds of pixels wide.
+MAX_IMAGE_SIDE = 1920
+_REDUCED = ((8, cv2.IMREAD_REDUCED_COLOR_8), (4, cv2.IMREAD_REDUCED_COLOR_4), (2, cv2.IMREAD_REDUCED_COLOR_2))
+
+
+def image_size(raw: bytes) -> tuple[int, int] | None:
+    """(width, height) from a JPEG or PNG header without decoding the picture, or None."""
+    if raw[:8] == b"\x89PNG\r\n\x1a\n" and len(raw) >= 24:
+        return int.from_bytes(raw[16:20], "big"), int.from_bytes(raw[20:24], "big")
+    if raw[:2] != b"\xff\xd8":
+        return None
+    i, n = 2, len(raw)
+    while i + 9 < n:
+        if raw[i] != 0xFF:
+            return None
+        marker = raw[i + 1]
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:  # markers without a length
+            i += 2
+            continue
+        seg = int.from_bytes(raw[i + 2 : i + 4], "big")
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):  # start of frame
+            return int.from_bytes(raw[i + 7 : i + 9], "big"), int.from_bytes(raw[i + 5 : i + 7], "big")
+        i += 2 + seg
+    return None
+
+
+def decode_image(raw: bytes, max_side: int = MAX_IMAGE_SIDE) -> np.ndarray | None:
     arr = np.frombuffer(raw, np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    return img if img is not None and img.size else None
+    size = image_size(raw)
+    flag = cv2.IMREAD_COLOR
+    if size is not None and raw[:2] == b"\xff\xd8":
+        long_side = max(size)
+        for factor, reduced in _REDUCED:  # biggest reduction that still leaves >= max_side
+            if long_side // factor >= max_side:
+                flag = reduced
+                break
+    img = cv2.imdecode(arr, flag)
+    if img is None or not img.size:
+        return None
+    h, w = img.shape[:2]
+    if max(h, w) > max_side:
+        s = max_side / max(h, w)
+        img = cv2.resize(img, (max(1, round(w * s)), max(1, round(h * s))), interpolation=cv2.INTER_AREA)
+    return img
 
 
 def _is_image_bytes(raw: bytes) -> bool:
@@ -392,16 +435,28 @@ def _iou(a: Box, b: Box) -> float:
     return inter / union if union > 0 else 0.0
 
 
+FINE_TILE = 0.45  # 3x3 grid tile size (fraction of the picture), last resort of the zoom retry
+
+
 def zoom_candidates(detector: Any, img: np.ndarray, *, frac: float = 0.6, limit: int = 4) -> list[Box]:
     """Plate boxes from the whole image plus 2x2 overlapping tiles (each `frac` of the image), mapped
     back to full-image coordinates, overlaps merged (best score kept), best score first."""
     h, w = img.shape[:2]
-    th, tw = max(1, int(h * frac)), max(1, int(w * frac))
     found: list[Box] = list(detector.detect(img))
+    th, tw = max(1, int(h * frac)), max(1, int(w * frac))
     for y in (0, h - th):
         for x in (0, w - tw):
             for b in detector.detect(img[y : y + th, x : x + tw]):
                 found.append(Box(b.x1 + x, b.y1 + y, b.x2 + x, b.y2 + y, b.score))
+    if not found:
+        # Still nothing: a small plate in a big, tall picture (a parked bike in a 12 MP phone photo is
+        # ~12 px tall at the detector's size). A finer 3x3 grid of smaller tiles - only paid for here.
+        th, tw = max(1, int(h * FINE_TILE)), max(1, int(w * FINE_TILE))
+        for yi in range(3):
+            for xi in range(3):
+                y, x = round(yi * (h - th) / 2), round(xi * (w - tw) / 2)
+                for b in detector.detect(img[y : y + th, x : x + tw]):
+                    found.append(Box(b.x1 + x, b.y1 + y, b.x2 + x, b.y2 + y, b.score))
     kept: list[Box] = []
     for b in sorted(found, key=lambda b: -b.score):
         if all(_iou(b, k) < 0.5 for k in kept):
@@ -570,6 +625,8 @@ class BurstBuffer:
 class _Ctx:
     cfg: AppConfig
     buffer: BurstBuffer
+    # fast_ack mode: the disk queue each POST is written to before the reply (see Spool).
+    spool: Any = None
     # Set in respond_with_plate mode: read+vote one POST's images inline and return the events. It locks
     # the (single, shared) engine, so concurrent POSTs are voted one at a time.
     vote_fn: Any = None
@@ -639,6 +696,12 @@ def _make_handler(ctx: _Ctx) -> type[BaseHTTPRequestHandler]:
                 self._discard(length)  # read it off the socket (not kept) so the client sees the reply
                 self._reply(503, {"ok": False, "error": "busy, retry shortly"})
                 return
+            if self.headers.get("Expect", "").lower() == "100-continue":
+                # Clients that ask (curl and some cameras for bodies > 1 MB) would otherwise wait ~1 s
+                # before sending the picture. HTTP/1.0 handlers don't answer this by themselves.
+                with contextlib.suppress(OSError):
+                    self.wfile.write(b"HTTP/1.1 100 Continue\r\n\r\n")
+                    self.wfile.flush()
             try:
                 self._handle_body(length)
             finally:
@@ -695,6 +758,19 @@ def _make_handler(ctx: _Ctx) -> type[BaseHTTPRequestHandler]:
             ctx.images_in += len(images)
             vid = str(vehicle_id) if vehicle_id not in (None, "") else None
             cam = str(camera) if camera not in (None, "") else None
+            # Fast ack: queue this vehicle on disk and answer now; the reader works through the queue.
+            if ctx.spool is not None:
+                try:
+                    item = ctx.spool.put(images, cam, vid)
+                except OSError:
+                    log.exception("cannot write the queue")
+                    item = None
+                if item is None:  # queue full (or disk error): the camera keeps it and re-sends
+                    self._reply(503, {"ok": False, "error": "busy, retry shortly"})
+                    return
+                self._reply(200, {"ok": True, "queued": True, "id": item, "images": len(images),
+                                  "vehicle_id": vid})
+                return
             # Synchronous mode: this POST is one whole vehicle. Read+vote inline, push to the client API,
             # and return the plate(s) and the push outcome.
             if ic.respond_with_plate:
@@ -769,15 +845,118 @@ def _build_engine(cfg: AppConfig, store: Any, detector: Any, ocr: Any) -> Any:
     return Engine(cfg, detector, ocr, store, motion=lambda _f: True)
 
 
+class Spool:
+    """fast_ack: the queue of received vehicles, on disk so nothing is lost if the process restarts.
+    One folder per POST (images + meta.json), written under a temporary name and renamed when complete,
+    so a half-written POST is never read. Processed in arrival order; a folder is deleted once its
+    plate is saved (the client API sender takes it from the database)."""
+
+    MAX_TRIES = 3  # a POST that keeps failing is moved to spool/failed instead of blocking the queue
+
+    def __init__(self, root: Path, max_items: int) -> None:
+        self.root, self.max_items = Path(root), max_items
+        self.failed = self.root / "failed"
+        self.root.mkdir(parents=True, exist_ok=True)
+        for tmp in self.root.glob("*.tmp"):  # a POST cut off by a crash mid-write: never acknowledged
+            _rmtree(tmp)
+        self._lock = threading.Lock()
+        self._seq = 0
+        self._count = len(self.pending())
+        self.ready = threading.Event()
+        if self._count:
+            self.ready.set()
+
+    def pending(self) -> list[Path]:
+        return sorted(self.root.glob("*.post"))
+
+    def __len__(self) -> int:
+        return self._count
+
+    def put(self, images: list[bytes], camera: str | None, vehicle_id: str | None) -> str | None:
+        """Write one vehicle; returns its id, or None when the queue is full."""
+        with self._lock:
+            if self._count >= self.max_items:
+                return None
+            self._seq += 1
+            name = f"{time.time_ns()}-{self._seq:06d}"
+            self._count += 1
+        tmp = self.root / f"{name}.tmp"
+        try:
+            tmp.mkdir()
+            for i, raw in enumerate(images):
+                (tmp / f"{i:02d}.img").write_bytes(raw)
+            (tmp / "meta.json").write_text(json.dumps({"camera": camera, "vehicle_id": vehicle_id}))
+            tmp.rename(self.root / f"{name}.post")
+        except OSError:
+            _rmtree(tmp)
+            with self._lock:
+                self._count -= 1
+            raise
+        self.ready.set()
+        return name
+
+    def load(self, item: Path) -> tuple[list[bytes], str | None, str | None]:
+        meta = json.loads((item / "meta.json").read_text())
+        images = [p.read_bytes() for p in sorted(item.glob("*.img"))]
+        return images, meta.get("camera"), meta.get("vehicle_id")
+
+    def done(self, item: Path) -> None:
+        _rmtree(item)
+        with self._lock:
+            self._count = max(0, self._count - 1)
+
+    def give_up(self, item: Path) -> None:
+        self.failed.mkdir(exist_ok=True)
+        with contextlib.suppress(OSError):
+            item.rename(self.failed / item.name)
+        with self._lock:
+            self._count = max(0, self._count - 1)
+
+
+def _rmtree(path: Path) -> None:
+    import shutil
+
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _spool_worker(spool: Spool, vote: Any, stop: threading.Event) -> None:
+    """Read the queued vehicles one by one, oldest first, until `stop` (the current one is finished)."""
+    tries: dict[str, int] = {}
+    while not stop.is_set():
+        items = spool.pending()
+        if not items:
+            spool.ready.clear()
+            if not spool.pending():  # a POST may have landed between the two looks
+                spool.ready.wait(0.5)
+            continue
+        for item in items:
+            if stop.is_set():
+                return
+            try:
+                images, camera, vid = spool.load(item)
+                vote(images, camera, vid)
+            except Exception:  # noqa: BLE001 - one bad POST must not stop the queue
+                n = tries[item.name] = tries.get(item.name, 0) + 1
+                log.exception("queued vehicle %s failed (try %d of %d)", item.name, n, Spool.MAX_TRIES)
+                if n >= Spool.MAX_TRIES:
+                    spool.give_up(item)
+                    tries.pop(item.name, None)
+                continue
+            spool.done(item)
+            tries.pop(item.name, None)
+
+
 def run_ingest(
     cfg: AppConfig, store: Any, detector: Any, ocr: Any, *, stop=lambda: False, pusher: Any = None
 ) -> int:
-    """Start the receiver + grouping worker and block until stop() turns true. Returns 0.
+    """Start the receiver + grouping worker and block until stop() turns true. Returns 0, or
+    EXIT_MEMORY when the process grows past runtime.max_rss_mb (it stops cleanly; systemd restarts it).
     `pusher` (respond_with_plate mode) is the anpr.push.Pusher whose background thread main() runs; the
     inline push shares it so a plate is never sent twice."""
     engine = _build_engine(cfg, store, detector, ocr)
     engine.collect_duplicates = True  # report re-sent vehicles as duplicates, not as failed reads
-    sync = cfg.ingest.respond_with_plate
+    fast = cfg.ingest.fast_ack
+    sync = cfg.ingest.respond_with_plate and not fast
     # One shared engine, so every read+vote runs under this lock (the async worker is already single, but
     # in sync mode several HTTP threads could call in at once). The GVD camera POSTs one event at a time.
     engine_lock = threading.Lock()
@@ -832,28 +1011,57 @@ def run_ingest(
     buf = BurstBuffer(cfg, process)
     slots = threading.BoundedSemaphore(_SYNC_MAX_INFLIGHT) if sync else None
     ctx = _Ctx(cfg, buf, vote_fn=vote, push_fn=push_fn, slots=slots)
+    spool_stop = threading.Event()
+    spool_thread = None
+    if fast:
+        ctx.spool = Spool(Path(cfg.storage.image_dir).parent / "spool", cfg.ingest.spool_max)
+        if len(ctx.spool):
+            log.info("fast ack: %d vehicle(s) queued from before, reading them first", len(ctx.spool))
+        spool_thread = threading.Thread(
+            target=_spool_worker, args=(ctx.spool, vote, spool_stop), name="ingest-spool", daemon=True
+        )
+        spool_thread.start()
     srv = make_server(ctx)
     http = threading.Thread(
         target=srv.serve_forever, kwargs={"poll_interval": 0.5}, name="ingest-http", daemon=True
     )
-    mode = "read+reply per POST" if sync else "group+vote per vehicle"
+    mode = "fast ack, read from the disk queue" if fast else (
+        "read+reply per POST" if sync else "group+vote per vehicle")
     log.info("ingest server on http://%s:%d%s  (camera POSTs vehicle images here; %s)",
              cfg.ingest.host, cfg.ingest.port, cfg.ingest.path, mode)
-    if not sync:  # the grouping buffer is unused in sync mode (each POST is one whole vehicle)
+    if not sync and not fast:  # the grouping buffer is unused when each POST is one whole vehicle
         buf.start()
     http.start()
+    from anpr.engine import EXIT_MEMORY, current_rss_mb
+
+    code = 0
+    next_check = time.monotonic()
     try:
         while not stop():
             time.sleep(0.2)
+            # Memory guard (the engine has the same): leave cleanly - drain, close the database - before
+            # the kernel's hard limit (systemd MemoryMax) would kill the process mid-write.
+            if time.monotonic() >= next_check:
+                next_check = time.monotonic() + cfg.runtime.status_interval_s
+                rss = current_rss_mb()
+                if rss > cfg.runtime.max_rss_mb:
+                    log.error(
+                        "memory %.0f MB > limit %.0f MB, exiting for restart", rss, cfg.runtime.max_rss_mb
+                    )
+                    code = EXIT_MEMORY
+                    break
     finally:
         # Order matters: stop new POSTs first, THEN flush/drain the buffer (so no burst is lost). The
         # caller closes the store only after this returns, so every voted plate is written and queued.
         srv.shutdown()
         srv.server_close()
-        if not sync:
+        if spool_thread is not None:  # finish the vehicle being read; the rest stays queued on disk
+            spool_stop.set()
+            spool_thread.join(timeout=30)
+        elif not sync:
             buf.stop()
     log.info("ingest stopped: requests=%d images=%d", ctx.received, ctx.images_in)
-    return 0
+    return code
 
 
 def main(argv: list[str] | None = None) -> int:

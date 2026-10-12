@@ -3,17 +3,45 @@
 #   anpr engine [--config FILE] [--machine-id | --check-licence | ...]
 #   anpr web    [--config FILE] [--host H] [--port P]
 #   anpr probe-camera '<rtsp link>' [--guess-main]
+#   anpr dashboard on|off|status   (needs sudo) turn the web dashboard on / off; the choice is kept in
+#                                  config.yaml (web.enabled) and survives reboots and upgrades
 #   anpr version
 APP=/opt/anpr
 cmd=${1:-}
 [ $# -gt 0 ] && shift
+if [ "$cmd" = "dashboard" ]; then
+  conf="$APP/config.yaml"
+  state() { sed -n '/^web:/,/^[a-z]/p' "$conf" | grep -E '^  enabled:' | grep -qE 'true' && echo on || echo off; }
+  case "${1:-status}" in
+    on|off)
+      [ "$(id -u)" = "0" ] || { echo "run with sudo: sudo $0 dashboard $1" >&2; exit 1; }
+      want=false; [ "$1" = "on" ] && want=true
+      if sed -n '/^web:/,/^[a-z]/p' "$conf" | grep -qE '^  enabled:'; then
+        sed -i -E "/^web:/,/^[a-z]/ s/^  enabled:.*/  enabled: $want   # dashboard on\/off: sudo \/opt\/anpr\/bin\/anpr dashboard on|off/" "$conf"
+      else
+        sed -i -E "s/^web:\$/web:\n  enabled: $want   # dashboard on\/off: sudo \/opt\/anpr\/bin\/anpr dashboard on|off/" "$conf"
+      fi
+      if [ "$1" = "on" ]; then
+        systemctl enable --now anpr-web >/dev/null 2>&1 && systemctl restart anpr-web
+        port=$(sed -n '/^web:/,/^[a-z]/p' "$conf" | grep -E '^  port:' | grep -oE '[0-9]+' | head -1)
+        echo "dashboard ON:  http://$(hostname -I 2>/dev/null | awk '{print $1}'):${port:-8000}"
+        echo "admin password: sudo grep admin_token $conf"
+      else
+        systemctl disable --now anpr-web >/dev/null 2>&1 || true
+        echo "dashboard OFF (plates are still read and sent to the client API)"
+      fi ;;
+    status) echo "dashboard $(state) (config web.enabled), service: $(systemctl is-active anpr-web 2>/dev/null || echo inactive)" ;;
+    *) echo "usage: anpr dashboard on|off|status" >&2; exit 2 ;;
+  esac
+  exit 0
+fi
 case "$cmd" in
   engine)        mod=anpr.engine ;;
   web)           mod=anpr.web.__main__ ;;
   ingest)        mod=anpr.ingest ;;
   probe-camera)  mod=probe_camera ;;
   version)       cat "$APP/VERSION"; exit 0 ;;
-  *) echo "usage: anpr engine|web|ingest|probe-camera|version [options]   (add --help for options)" >&2; exit 2 ;;
+  *) echo "usage: anpr engine|web|ingest|probe-camera|dashboard|version [options]   (add --help for options)" >&2; exit 2 ;;
 esac
 cd "$APP" || exit 1
 exec "$APP/.venv/bin/python" -s -c "

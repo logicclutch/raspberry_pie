@@ -92,7 +92,7 @@ class OcrConfig(_Section):
 class CropConfig(_Section):
     padding: float = Field(0.08, ge=0.0, le=0.5)
     min_width_px: int = Field(80, ge=1)
-    min_sharpness: float = Field(60.0, ge=0.0)  # variance of Laplacian on the gray crop
+    min_sharpness: float = Field(60.0, ge=0.0)  # variance of Laplacian, plate measured <= 240 px wide
     clahe_clip: float = Field(2.0, gt=0.0)
     # Off by default: on real video the reader (trained on unwarped crops) did better without it.
     deskew: bool = False
@@ -150,15 +150,48 @@ class VoteConfig(_Section):
     settle_growth: float = Field(0.05, ge=0.0)
 
 
+# Which HSRP conditions must pass for a frame to count as HSRP (config hsrp.rule, anpr.hsrp.passes).
+HsrpRule = Literal["any", "close", "far"]
+
+
+class HsrpWeights(_Section):
+    # HSRP conditions (anpr.hsrp), combined by hsrp.rule. The weight only makes the score (sum of
+    # the weights of the conditions that passed); 0 switches a condition off.
+    hologram: float = Field(0.35, ge=0.0, le=1.0)  # hologram-sized mark left of the text
+    blue: float = Field(0.30, ge=0.0, le=1.0)  # blue ink there (colour cameras only)
+    ind: float = Field(0.20, ge=0.0, le=1.0)  # the small "IND" letters below the hologram
+    font: float = Field(0.15, ge=0.0, le=1.0)  # standard HSRP font (neat printed plates pass too)
+
+
 class HsrpConfig(_Section):
     # Mark each saved plate HSRP / non-HSRP / not sure from the hologram + "IND" left of the text
     # (anpr.hsrp). Judged on the frames read before the plate is saved.
     enabled: bool = True
+    # model: a small trained classifier looks at the plate (anpr.hsrp.HsrpModel, models/hsrp/); much
+    #   more accurate than the hand-written checks. rules: the hand-written checks below (rule,
+    #   weights, two_line). If the model file is missing, the rules are used.
+    method: Literal["model", "rules"] = "model"
+    model_path: Path = Path("models/hsrp/hsrp_cls.onnx")
+    # Model output p = chance the plate is HSRP. p >= threshold -> HSRP. Within `margin` of the
+    # threshold the frame is "not sure" (not judged) instead of a coin toss.
+    threshold: float = Field(0.5, gt=0.0, lt=1.0)
+    margin: float = Field(0.1, ge=0.0, lt=0.5)
+    # method model, 2-line plates: when the model does not say HSRP but the hand-written check finds
+    # both the hologram and "IND", the plate is HSRP (the model misses many 2-line truck HSRPs).
+    two_line_marks: bool = True
+    weights: HsrpWeights = Field(default_factory=HsrpWeights)
+    # Which conditions must pass for a frame to count as HSRP:
+    #   close: hologram AND "IND" - clear, close camera view (the strongest proof);
+    #   far:   "IND" AND one of hologram / blue / font - far camera, night or IR;
+    #   any:   any one condition (old behaviour; the weak font check alone marks a plate HSRP).
+    rule: HsrpRule = "close"
     min_marked: int = Field(2, ge=1)  # HSRP: frames showing the mark (and >= 30% of judged frames)
     min_clean: int = Field(3, ge=1)  # non-HSRP: frames with a clean space (and <= 10% showing a mark)
-    # Report "not sure" as non-HSRP: only a plate where the mark was actually seen counts as HSRP.
-    # Plates too small, blurred or 2-line to judge are then saved as non-HSRP.
-    unsure_as_non_hsrp: bool = True
+    # A plate that can't be judged (too small, blurred, ...) is saved as "not sure: <reason>",
+    # e.g. "not sure: text not found". unsure_as_hsrp: save it as "hsrp (not sure: <reason>)"
+    # instead (wins over unsure_as_non_hsrp); unsure_as_non_hsrp: "non_hsrp (not sure: <reason>)".
+    unsure_as_hsrp: bool = False
+    unsure_as_non_hsrp: bool = False
     # Also judge 2-line plates (hologram in the top-left corner). Off by default: needs a clear,
     # close view (plate >= ~150 px wide, ideally colour) - on blurry grey video the plate frame and
     # bolt heads there look like a hologram. Off: 2-line plates are "not sure".
@@ -212,6 +245,14 @@ class IngestConfig(_Section):
     # "push" says whether THIS plate was accepted now, or is queued for the background sender (API down,
     # or behind earlier plates). A plate repeated within vote.dedupe_window_s comes back "duplicate": true.
     respond_with_plate: bool = False
+    # Answer the camera at once (well under 100 ms, even on a Pi 3B+) and read the plate right after,
+    # in the background. Each POST is one whole vehicle (like respond_with_plate). It is first written to
+    # a queue on disk (<storage image_dir>/../spool), so a restart or crash never loses a vehicle; the plate
+    # then goes to the client API (push:) as usual. The reply carries no plate, only {"ok": true,
+    # "queued": true, "id": ...}. Wins over respond_with_plate. When the queue holds spool_max vehicles
+    # (the Pi is far behind), new POSTs get 503 so the camera re-sends them later - nothing is dropped.
+    fast_ack: bool = False
+    spool_max: int = Field(1000, ge=10, le=100000)
     # Second look when a vehicle gives NO valid plate: search zoomed-in parts of each image (2x2 overlapping
     # tiles) and try every plate box found, best score first. The detector sees the whole photo at 320 px,
     # so a plate that is small in a big photo (or sits next to a bigger, unreadable hand-painted one) can be
@@ -245,7 +286,9 @@ class WebConfig(_Section):
 
 
 class RuntimeConfig(_Section):
-    max_rss_mb: float = Field(600.0, gt=0.0)  # Pi 3B+ has 1 GB total
+    # Pi 3B+ has 1 GB. Above this the engine / ingest receiver stop cleanly and systemd restarts them;
+    # it stays under the services' MemoryMax (750M) so the kernel never has to kill them mid-write.
+    max_rss_mb: float = Field(680.0, gt=0.0)
     status_interval_s: float = Field(2.0, gt=0.0)
     # Dashboard "Live" view: every N seconds the engine saves the latest frame (small JPEG with the
     # detector's boxes drawn on it): in RAM (/dev/shm) on Linux, else next to the image folder. 0 = off.
@@ -291,6 +334,7 @@ class AppConfig(_Section):
                         "config_path": fix(self.ocr.config_path),
                     }
                 ),
+                "hsrp": self.hsrp.model_copy(update={"model_path": fix(self.hsrp.model_path)}),
                 "storage": self.storage.model_copy(
                     update={
                         "db_path": fix(self.storage.db_path),

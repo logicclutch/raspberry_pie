@@ -656,6 +656,9 @@ td.c-num { font: 600 13px/1 var(--font-mono); color: var(--fg-2); white-space: n
 .tag-ok { color: var(--ok); border-color: var(--ok-line); background: var(--ok-dim); }
 .tag-bad { color: var(--bad); border-color: var(--bad-line); background: var(--bad-dim); }
 .tag-none { color: var(--fg-3, var(--fg-2)); border-style: dashed; background: none; }
+/* HSRP "not sure": the tag, then why underneath */
+.hsrp-cell { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.hsrp-note { display: block; max-width: 220px; font-size: 11px; line-height: 1.3; color: var(--fg-3, var(--fg-2)); white-space: normal; }
 .c-go { width: 28px; color: var(--fg-3); }
 .c-go svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 tr:hover .c-go { color: var(--signal-ink); }

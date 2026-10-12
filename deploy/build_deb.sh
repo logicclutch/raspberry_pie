@@ -2,10 +2,11 @@
 # Build the client .deb (Raspberry Pi OS 64-bit Bookworm, arm64) on the Mac.
 #   ./deploy/build_deb.sh              normal build  (dashboard + API, RTSP/Pi camera)
 #                                                                           -> dist/anpr_<ver>_arm64.deb
-#   HEADLESS=1 ./deploy/build_deb.sh   slim headless (no dashboard, API push only, supports two cameras)
+#   HEADLESS=1 ./deploy/build_deb.sh   headless (dashboard installed but OFF, API push only, two cameras)
 #                                                                           -> dist/anpr_<ver>_headless_arm64.deb
 #   INGEST=1 ./deploy/build_deb.sh     ingest/push receiver: the ANPR camera POSTs vehicle images to the
 #                                      Pi; the Pi reads the plate and sends it on. No RTSP/video. Lightest.
+#                                      Dashboard installed but OFF (client turns it on: anpr dashboard on).
 #                                                                           -> dist/anpr_<ver>_ingest_arm64.deb
 # Needs Docker with arm64 emulation (Docker Desktop / colima with qemu).
 #
@@ -15,8 +16,8 @@
 #   /opt/anpr/bin/anpr launcher: `anpr engine|web|probe-camera|version`
 #   systemd units, config.default.yaml, pi_check.sh, docs
 # Always slimmed: unused packages (sympy, mpmath, pip, setuptools) and the detector's .onnx source and
-# OCR candidates are dropped. HEADLESS also removes the dashboard (anpr/web + the web Python stack + the
-# web service) and ships the headless config (web off, preview off, two-camera ready, more RAM headroom).
+# OCR candidates are dropped. HEADLESS / INGEST keep the dashboard installed but switched OFF (config
+# web.enabled: false, service disabled); `sudo /opt/anpr/bin/anpr dashboard on` turns it on at any time.
 # Built INSIDE an arm64 Debian Bookworm container at the Pi's real path (/opt/anpr, python3.11), so the
 # venv matches the Pi exactly. Vendor-only files (tools/, training/, licence.json, videos) never enter it.
 set -euo pipefail
@@ -32,8 +33,8 @@ DIST="${DIST:-bookworm}"
 PYVER="${PYVER:-3.11}"
 OUT="$SRC/dist"
 mkdir -p "$OUT"
-# MODE: ingest > headless > normal. ingest and headless are both "no dashboard" (web stack stripped).
-if [ "$INGEST" = "1" ]; then MODE=ingest; SUFFIX="_ingest"; HEADLESS=1
+# MODE: ingest > headless > normal. ingest and headless ship the dashboard switched off (not removed).
+if [ "$INGEST" = "1" ]; then MODE=ingest; SUFFIX="_ingest"
 elif [ "$HEADLESS" = "1" ]; then MODE=headless; SUFFIX="_headless"
 else MODE=normal; SUFFIX=""; fi
 # A non-default OS goes in the file name so the two builds never clash (e.g. ..._ingest_trixie_arm64.deb).
@@ -67,7 +68,7 @@ python${PYVER} -m venv "$APP/.venv"
 "$APP/.venv/bin/pip" check
 
 echo "== app files (whitelist: code + web static + models + config)"
-mkdir -p "$LIB" "$APP/bin" "$APP/deploy" "$APP/docs" "$LIB/models/detector" "$LIB/models/ocr"
+mkdir -p "$LIB" "$APP/bin" "$APP/deploy" "$APP/docs" "$LIB/models/detector" "$LIB/models/ocr" "$LIB/models/hsrp"
 cd /src
 tar -cf - --exclude=__pycache__ anpr | tar -C "$LIB" -xf -
 cp scripts/probe_camera.py "$LIB/probe_camera.py"
@@ -76,6 +77,7 @@ cp docs/CAMERA_SETUP.md docs/CLIENT_API_FORMAT.md "$APP/docs/"
 # The detector loads the ncnn model directory; the .onnx is only the conversion source (not shipped).
 cp -r models/detector/plate_det_ncnn_model "$LIB/models/detector/"
 cp models/ocr/plate_ocr.onnx models/ocr/plate_ocr_config.yaml "$LIB/models/ocr/"
+cp models/hsrp/hsrp_cls.onnx "$LIB/models/hsrp/"
 
 case "$MODE" in
   ingest)   CONF=deploy/deb/config.ingest.yaml ;;
@@ -86,6 +88,7 @@ esac
 sed -e "s#models/detector/plate_det_ncnn_model#lib/models/detector/plate_det_ncnn_model#" \
     -e "s#models/ocr/plate_ocr.onnx#lib/models/ocr/plate_ocr.onnx#" \
     -e "s#models/ocr/plate_ocr_config.yaml#lib/models/ocr/plate_ocr_config.yaml#" \
+    -e "s#models/hsrp/hsrp_cls.onnx#lib/models/hsrp/hsrp_cls.onnx#" \
     "$CONF" > "$APP/config.default.yaml"
 install -m 755 deploy/deb/anpr "$APP/bin/anpr"
 echo "$VERSION" > "$APP/VERSION"
@@ -98,12 +101,6 @@ drop_pkg() {  # remove an installed package dir + its dist-info (safe: verified 
 }
 for p in sympy mpmath pip setuptools pkg_resources _distutils_hack wheel; do drop_pkg "$p"; done
 rm -f "$SITE"/*.pth 2>/dev/null || true
-if [ "$HEADLESS" = "1" ]; then
-  echo "== headless: remove the dashboard (anpr/web) and the web-only packages"
-  rm -rf "$LIB/anpr/web"
-  # The engine uses Python stdlib urllib for the API POST, not these; verified not imported by the engine.
-  for p in fastapi uvicorn starlette websockets httptools h11 click requests urllib3 certifi idna charset_normalizer; do drop_pkg "$p"; done
-fi
 
 echo "== compile to bytecode, then delete .py source (no source ships)"
 # -b: write foo.pyc beside foo.py (not in __pycache__), so imports work after the .py are removed.
@@ -123,13 +120,7 @@ echo "== smoke test (run from compiled bytecode, like the Pi will)"
 # Import every heavy module from the compiled .pyc, the way the service will on the Pi. --machine-id
 # needs real Pi hardware, so it is not part of the test.
 WEB_IMPORT="import anpr.web.app;"
-if [ "$HEADLESS" = "1" ]; then
-  WEB_IMPORT=""
-  "$APP/.venv/bin/python" -s -c "import sys; sys.path.insert(0,\"$LIB\");
-import importlib.util; assert importlib.util.find_spec(\"anpr.web\") is None, \"web should be gone\"; print(\"headless: web removed OK\")"
-else
-  "$APP/bin/anpr" web --help >/dev/null
-fi
+"$APP/bin/anpr" web --help >/dev/null
 "$APP/.venv/bin/python" -s -c "import sys; sys.path.insert(0,\"$LIB\"); $WEB_IMPORT import anpr.engine, anpr.detector, anpr.ocr, anpr.hsrp, anpr.push, anpr.licence, probe_camera; print(\"compiled imports OK\")"
 
 echo "== package tree"
@@ -138,13 +129,13 @@ cp -a "$APP" "$PKG/opt/"
 # Which systemd services ship depends on the mode.
 case "$MODE" in
   ingest)
-    # Only the ingest receiver (no camera engine, no dashboard).
-    cp /src/deploy/deb/anpr-ingest.service "$PKG/lib/systemd/system/"
+    # The ingest receiver (no camera engine) + the dashboard service, which postinst leaves off while
+    # config web.enabled is false (turn it on: sudo /opt/anpr/bin/anpr dashboard on).
+    cp /src/deploy/deb/anpr-ingest.service /src/deploy/deb/anpr-web.service "$PKG/lib/systemd/system/"
     ;;
   headless)
-    cp /src/deploy/deb/anpr-engine.service "$PKG/lib/systemd/system/"
-    # No dashboard -> the engine can use the RAM the web service would have taken.
-    sed -i -E "s/^MemoryMax=.*/MemoryMax=900M/" "$PKG/lib/systemd/system/anpr-engine.service"
+    cp /src/deploy/deb/anpr-engine.service /src/deploy/deb/anpr-web.service "$PKG/lib/systemd/system/"
+    sed -i -E "s/^MemoryMax=.*/MemoryMax=750M/" "$PKG/lib/systemd/system/anpr-engine.service"
     ;;
   *)
     cp /src/deploy/deb/anpr-engine.service /src/deploy/deb/anpr-web.service "$PKG/lib/systemd/system/"

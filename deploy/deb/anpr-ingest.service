@@ -9,12 +9,18 @@ User=anpr
 Group=anpr
 WorkingDirectory=/opt/anpr
 Environment=PYTHONUNBUFFERED=1
+# glibc: one malloc pool per thread makes a multi-threaded Python grow far past what it uses (HTTP
+# threads, two cameras). Two pools keep the RSS close to the real need on the 1 GB Pi.
+Environment=MALLOC_ARENA_MAX=2
 Environment=OMP_NUM_THREADS=4
 ExecStart=/opt/anpr/bin/anpr ingest --config /opt/anpr/config.yaml
 Restart=always
 RestartSec=3
 # No video decoding in this mode, so it is lighter than the camera engine. 1 GB Pi 3B+.
-MemoryMax=700M
+# MemoryHigh: the kernel reclaims (page cache) above this before the hard limit; the receiver also
+# exits cleanly above runtime.max_rss_mb (680) so MemoryMax is a last resort.
+MemoryHigh=700M
+MemoryMax=750M
 # Room for a clean stop while the plate sender finishes a request (10 s API timeout) and the
 # database is closed; a kill could re-send the last batch.
 TimeoutStopSec=25

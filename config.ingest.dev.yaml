@@ -58,13 +58,27 @@ vote:
   settle_s: 1.0        # decide once the plate stopped growing for 1 s (vehicle close/stopped) or left
   settle_growth: 0.05
 hsrp:
-  # Mark each saved plate HSRP / Non-HSRP / Not sure (hologram + "IND" left of the number).
-  # 2-line plates and plates too small or blurred to judge show "Not sure".
+  # Mark each saved plate HSRP / Non-HSRP (hologram + "IND" left of the number). A plate that
+  # can't be judged (too small, blurred, ...) is saved as "not sure: <reason>", e.g.
+  # "not sure: text not found".
   enabled: true
   min_marked: 2
   min_clean: 3
-  unsure_as_non_hsrp: true  # only plates where the mark is seen count as HSRP
-  two_line: false  # also judge 2-line plates; turn on only with a clear, close (ideally colour) camera view
+  # model = trained classifier (models/hsrp/hsrp_cls.onnx, 97.9% on held-out Indian photos); rules = the
+  # hand-written checks below (rule / two_line). Missing model file -> rules.
+  method: model
+  model_path: models/hsrp/hsrp_cls.onnx
+  threshold: 0.5   # classifier says HSRP at or above this
+  margin: 0.1      # this close to the threshold -> "not sure: model unsure"
+  two_line_marks: true  # 2-line plate the model misses: hologram + "IND" found -> hsrp
+  # Which checks must pass for HSRP (method: rules only):
+  #   close: hologram AND "IND"                  - clear, close camera view
+  #   far:   "IND" AND one of hologram/blue/font - camera far away, night or IR
+  #   any:   any one check (old; the font check alone marks a plate HSRP)
+  rule: close
+  unsure_as_hsrp: false  # true: save "not sure" plates as "hsrp (not sure: <reason>)"
+  unsure_as_non_hsrp: false  # true: as "non_hsrp (not sure: <reason>)"; both false: "not sure: <reason>"
+  two_line: true  # also judge 2-line plates (trucks, bikes); best with a clear, close camera view
 push:
   # Send every confirmed plate to the client's server. When this section is here it is the source of
   # truth: these values are applied on every restart (edit the file, then restart). Remove the whole
@@ -87,7 +101,7 @@ web:
   auth_token: null
   admin_token: null   # admin password for Activate / Settings / Add stream (the Pi installer sets one)
 runtime:
-  max_rss_mb: 600.0
+  max_rss_mb: 680.0         # Pi 3B+: stop cleanly + restart above this (service MemoryMax=750M)
   status_interval_s: 2.0
   preview_interval_s: 1.0   # dashboard Live view: seconds between pictures (0 = off)
   preview_width: 640
@@ -104,3 +118,6 @@ ingest:
   camera_field: ''
   max_body_mb: 12.0
   respond_with_plate: true
+  # fast_ack: answer the camera at once (< 100 ms) and read the plate right after from a disk queue
+  # (nothing lost on restart; the plate goes to the client API). The reply then has no plate.
+  fast_ack: true

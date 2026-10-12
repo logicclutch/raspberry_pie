@@ -75,15 +75,35 @@ echo "== services"
 install -m 644 "$APP/deploy/anpr-engine.service" /etc/systemd/system/
 install -m 644 "$APP/deploy/anpr-web.service" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable anpr-engine anpr-web
-systemctl restart anpr-engine anpr-web
+# The dashboard runs only if config.yaml says web.enabled: true (missing = true). web.enabled: false ->
+# no dashboard: plates still go to the client API, and the licence is activated from the command line.
+WEB_ENABLED=$("$APP/.venv/bin/python" - "$APP/config.yaml" <<'PY' 2>/dev/null || echo True
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+print((d.get("web") or {}).get("enabled", True))
+PY
+)
+systemctl enable anpr-engine
+systemctl restart anpr-engine
+if [[ "$WEB_ENABLED" == "False" ]]; then
+  systemctl disable --now anpr-web >/dev/null 2>&1 || true
+else
+  systemctl enable anpr-web
+  systemctl restart anpr-web
+fi
 
 echo "== done"
 echo "check:      sudo $APP/deploy/pi_check.sh"
 echo "logs:       journalctl -u anpr-engine -f"
-echo "dashboard:  http://$(hostname -I | awk '{print $1}'):8000"
 echo "device ID:  $(cd "$APP" && "$APP/.venv/bin/python" -m anpr.engine --machine-id)  (send it to the supplier for the licence)"
-echo "licence:    open the dashboard and paste the licence key (Activate); the engine starts within seconds"
+if [[ "$WEB_ENABLED" == "False" ]]; then
+  echo "dashboard:  off (web.enabled: false in $APP/config.yaml). Turn on: set web.enabled: true there, then"
+  echo "            sudo systemctl enable --now anpr-web"
+  echo "licence:    sudo -u anpr $APP/.venv/bin/python -m anpr.engine --config $APP/config.yaml --activate <KEY>"
+else
+  echo "dashboard:  http://$(hostname -I | awk '{print $1}'):8000"
+  echo "licence:    open the dashboard and paste the licence key (Activate); the engine starts within seconds"
+fi
 if [[ -n "$NEW_ADMIN" ]]; then
   echo "admin pass: $NEW_ADMIN   (needed for Activate, Settings, Add stream; also in $APP/config.yaml web.admin_token)"
 else

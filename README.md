@@ -85,6 +85,32 @@ one on the test videos: `training/train.sh --name gate-v1`. The live model is ne
 If it passes, switch `ocr.model_path` / `ocr.config_path` in `config.yaml` to the candidate. Step by step, with
 data targets and rollback: [training/README.md](training/README.md).
 
+## HSRP / non-HSRP
+
+Each saved plate gets `hsrp`, `non_hsrp`, or `not sure: <short reason>`. With `hsrp.method: model` (the
+default) a small trained image classifier decides (`models/hsrp/hsrp_cls.onnx`, MobileNetV3-small, about 6 MB,
+~200 ms per plate on a Pi 3B+). It was trained on the Kaggle "Indian License Plate Dataset" (905 HSRP / non-HSRP
+photos) with labels checked by eye; decorative plates with a European-style blue "IND" strip count as
+non-HSRP (they have no chakra hologram). Measured on 532 photos each model never trained on (group 5-fold):
+HSRP 279/281 (99.3%), non-HSRP 242/251 (96.4%), overall 97.9%. On 69 truck plates (an independent set,
+`tests/fixtures/truck_plates`): non-HSRP 56/56, HSRP only 5/13 - small, dirty truck holograms are its weak spot.
+`hsrp.two_line_marks` (on by default) adds a second opinion for 2-line plates: when the model does not say HSRP
+but the hand-written check finds both the hologram and "IND", the plate is HSRP. Trucks: HSRP 6/13, non-HSRP
+still 56/56; no Kaggle non-HSRP plate changes (the font check alone is not used: neat old printed plates pass
+it). `hsrp.method: rules` falls back to the hand-written hologram / "IND" checks. A camera can only tell what a plate *looks like*: a good copy of an HSRP passes.
+
+## Raspberry Pi 3B+ limits
+
+Every service is capped at 750 MB (`MemoryMax`); the engine and the ingest receiver stop cleanly and restart
+above `runtime.max_rss_mb` (680 MB) instead of being killed mid-write. Big pictures (phone photos, 4K
+snapshots) are decoded at reduced size, at most 1920 px on the long side. Under overload the ingest receiver
+answers `503` so the camera retries, instead of queueing without limit. Two cameras run in one process
+(`cameras:` in `config.yaml`) and share one HSRP classifier.
+
+The ingest and headless packages install the dashboard but leave it **off** (`web.enabled: false`, about 60 MB
+of RAM saved). The client turns it on or off at any time, and the choice survives reboots and upgrades:
+`sudo /opt/anpr/bin/anpr dashboard on` / `off` / `status`.
+
 ## Deliver to a client (no source code): the `.deb` installer
 
 For clients who should **not** get the source, build a Debian package on the Mac and send only that one
