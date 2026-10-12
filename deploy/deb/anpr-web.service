@@ -9,6 +9,9 @@ User=anpr
 Group=anpr
 WorkingDirectory=/opt/anpr
 Environment=PYTHONUNBUFFERED=1
+# glibc: one malloc pool per thread makes a multi-threaded Python grow far past what it uses (HTTP
+# threads, two cameras). Two pools keep the RSS close to the real need on the 1 GB Pi.
+Environment=MALLOC_ARENA_MAX=2
 ExecStart=/opt/anpr/bin/anpr web --config /opt/anpr/config.yaml
 Restart=always
 RestartSec=3

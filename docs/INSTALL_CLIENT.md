@@ -78,7 +78,16 @@ http://<PI-IP>:8080/api/v1/ingest
 - The Pi accepts **any common format** — JSON with a base64 image, a multipart file upload, or a plain
   JPEG body — so whatever the camera sends will work.
 
-**What the Pi answers** (each POST is one vehicle; the reply comes back in about a second):
+**What the Pi answers.** By default (`ingest.fast_ack: true`) the Pi answers **at once, in well under 100 ms**,
+and reads the plate right after. The POST is first saved to a queue on the Pi's disk, so a restart never loses
+a vehicle, and the plate is then sent to your API (section `push:`) as usual:
+```json
+{"ok": true, "queued": true, "id": "1791564939034247000-000001", "images": 2, "vehicle_id": null}
+```
+If the Pi is ever far behind (queue full), it answers `503` and the camera sends the vehicle again later.
+
+With `fast_ack: false` and `respond_with_plate: true` the reply waits for the read instead (about a second on a
+Pi 3B+) and carries the plate (each POST is one vehicle):
 ```json
 {"ok": true, "images": 2, "plate": "UP83DT0718",
  "plates": [{"plate": "UP83DT0718", "confidence": 0.988, "kind": "standard", "hsrp": "non_hsrp",

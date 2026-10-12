@@ -1,0 +1,692 @@
+[
+ {
+  "file": "train_02_0.jpg",
+  "box": [
+   20,
+   10,
+   103,
+   30
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_02_1.jpg",
+  "box": [
+   24,
+   16,
+   120,
+   49
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_04_0.jpg",
+  "box": [
+   29,
+   40,
+   148,
+   121
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_05_0.jpg",
+  "box": [
+   29,
+   38,
+   147,
+   115
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_06_0.jpg",
+  "box": [
+   29,
+   36,
+   147,
+   108
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_07_0.jpg",
+  "box": [
+   24,
+   31,
+   120,
+   93
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_08_0.jpg",
+  "box": [
+   45,
+   44,
+   225,
+   132
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_09_0.jpg",
+  "box": [
+   30,
+   48,
+   151,
+   144
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_09_1.jpg",
+  "box": [
+   25,
+   34,
+   126,
+   103
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_11_0.jpg",
+  "box": [
+   49,
+   59,
+   248,
+   178
+  ],
+  "label": "hsrp"
+ },
+ {
+  "file": "train_12_0.jpg",
+  "box": [
+   85,
+   63,
+   426,
+   189
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_13_0.jpg",
+  "box": [
+   65,
+   53,
+   327,
+   160
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_14_0.jpg",
+  "box": [
+   79,
+   41,
+   397,
+   123
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_16_0.jpg",
+  "box": [
+   45,
+   51,
+   227,
+   154
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_17_0.jpg",
+  "box": [
+   89,
+   120,
+   447,
+   360
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_18_0.jpg",
+  "box": [
+   39,
+   69,
+   197,
+   207
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_19_0.jpg",
+  "box": [
+   68,
+   49,
+   343,
+   147
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_20_0.jpg",
+  "box": [
+   43,
+   71,
+   215,
+   214
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_21_0.jpg",
+  "box": [
+   30,
+   44,
+   153,
+   133
+  ],
+  "label": "hsrp"
+ },
+ {
+  "file": "train_23_0.jpg",
+  "box": [
+   69,
+   54,
+   346,
+   162
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_25_0.jpg",
+  "box": [
+   59,
+   71,
+   295,
+   213
+  ],
+  "label": "hsrp"
+ },
+ {
+  "file": "train_26_0.jpg",
+  "box": [
+   26,
+   38,
+   133,
+   115
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_26_1.jpg",
+  "box": [
+   20,
+   49,
+   102,
+   147
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_27_0.jpg",
+  "box": [
+   31,
+   60,
+   156,
+   180
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_29_0.jpg",
+  "box": [
+   34,
+   34,
+   172,
+   103
+  ],
+  "label": "hsrp"
+ },
+ {
+  "file": "train_30_0.jpg",
+  "box": [
+   30,
+   46,
+   151,
+   139
+  ],
+  "label": "hsrp"
+ },
+ {
+  "file": "train_31_0.jpg",
+  "box": [
+   54,
+   68,
+   273,
+   205
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_31_1.jpg",
+  "box": [
+   44,
+   66,
+   222,
+   198
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_33_0.jpg",
+  "box": [
+   70,
+   108,
+   351,
+   325
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_34_0.jpg",
+  "box": [
+   74,
+   105,
+   370,
+   316
+  ],
+  "label": "hsrp"
+ },
+ {
+  "file": "train_35_0.jpg",
+  "box": [
+   32,
+   31,
+   160,
+   93
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_35_1.jpg",
+  "box": [
+   38,
+   51,
+   191,
+   153
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_36_0.jpg",
+  "box": [
+   77,
+   44,
+   386,
+   133
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_37_0.jpg",
+  "box": [
+   93,
+   54,
+   466,
+   163
+  ],
+  "label": "hsrp"
+ },
+ {
+  "file": "train_38_0.jpg",
+  "box": [
+   30,
+   30,
+   151,
+   91
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_39_0.jpg",
+  "box": [
+   41,
+   32,
+   208,
+   96
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_40_0.jpg",
+  "box": [
+   33,
+   43,
+   167,
+   129
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_41_0.jpg",
+  "box": [
+   50,
+   70,
+   250,
+   210
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_42_0.jpg",
+  "box": [
+   43,
+   74,
+   215,
+   222
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_43_0.jpg",
+  "box": [
+   43,
+   54,
+   215,
+   162
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_46_0.jpg",
+  "box": [
+   41,
+   46,
+   205,
+   138
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_47_0.jpg",
+  "box": [
+   39,
+   52,
+   196,
+   157
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_48_0.jpg",
+  "box": [
+   46,
+   90,
+   233,
+   270
+  ],
+  "label": "hsrp"
+ },
+ {
+  "file": "train_50_0.jpg",
+  "box": [
+   57,
+   106,
+   285,
+   318
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_51_0.jpg",
+  "box": [
+   57,
+   71,
+   286,
+   214
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_52_0.jpg",
+  "box": [
+   61,
+   80,
+   306,
+   241
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_53_0.jpg",
+  "box": [
+   56,
+   78,
+   281,
+   235
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_55_0.jpg",
+  "box": [
+   72,
+   76,
+   362,
+   229
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_56_0.jpg",
+  "box": [
+   57,
+   76,
+   286,
+   229
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_57_0.jpg",
+  "box": [
+   44,
+   44,
+   221,
+   133
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_58_0.jpg",
+  "box": [
+   66,
+   82,
+   333,
+   246
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_60_0.jpg",
+  "box": [
+   67,
+   62,
+   337,
+   186
+  ],
+  "label": "hsrp"
+ },
+ {
+  "file": "train_61_0.jpg",
+  "box": [
+   16,
+   21,
+   82,
+   64
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_62_0.jpg",
+  "box": [
+   49,
+   68,
+   246,
+   204
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_63_0.jpg",
+  "box": [
+   31,
+   41,
+   155,
+   123
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_65_0.jpg",
+  "box": [
+   90,
+   97,
+   452,
+   291
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_67_0.jpg",
+  "box": [
+   38,
+   30,
+   191,
+   90
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_68_0.jpg",
+  "box": [
+   86,
+   120,
+   430,
+   361
+  ],
+  "label": "hsrp"
+ },
+ {
+  "file": "train_69_0.jpg",
+  "box": [
+   68,
+   54,
+   343,
+   162
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_70_0.jpg",
+  "box": [
+   33,
+   59,
+   166,
+   177
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "train_72_0.jpg",
+  "box": [
+   72,
+   133,
+   361,
+   399
+  ],
+  "label": "hsrp"
+ },
+ {
+  "file": "val_74_0.jpg",
+  "box": [
+   20,
+   27,
+   103,
+   82
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "val_75_0.jpg",
+  "box": [
+   69,
+   92,
+   345,
+   276
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "val_78_0.jpg",
+  "box": [
+   61,
+   74,
+   306,
+   222
+  ],
+  "label": "hsrp"
+ },
+ {
+  "file": "val_80_0.jpg",
+  "box": [
+   23,
+   21,
+   117,
+   63
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "val_81_0.jpg",
+  "box": [
+   100,
+   148,
+   500,
+   444
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "val_82_0.jpg",
+  "box": [
+   44,
+   84,
+   311,
+   252
+  ],
+  "label": "hsrp"
+ },
+ {
+  "file": "val_83_0.jpg",
+  "box": [
+   100,
+   76,
+   500,
+   230
+  ],
+  "label": "non_hsrp"
+ },
+ {
+  "file": "val_83_1.jpg",
+  "box": [
+   91,
+   103,
+   456,
+   310
+  ],
+  "label": "non_hsrp"
+ }
+]

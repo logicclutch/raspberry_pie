@@ -93,7 +93,7 @@ Authorization: Bearer <device-secret-key>
 | `plate` | text | `HR39E7913` | Plate number. Capital letters and digits only, no spaces. |
 | `plate_display` | text | `HR 39 E 7913` | The same number with spaces, for showing on screen. |
 | `plate_type` | text | `standard` | `standard` = normal state plate, `bh` = Bharat series (`22 BH 1234 AB`). |
-| `hsrp` | text or null | `hsrp` | `hsrp`, `non_hsrp`, `unsure`, or `null` (check switched off). |
+| `hsrp` | text or null | `hsrp` | `hsrp`, `non_hsrp`, or `null` (check switched off). A plate that could not be judged is `not sure: <reason>` with a short reason, e.g. `not sure: text not found` (other reasons: `low contrast`, `plate cut off`, `2-line plate`, `images disagree (1 vs 2)`, ...). If the Pi has `hsrp.unsure_as_hsrp` or `unsure_as_non_hsrp` on, it is `hsrp (not sure: <reason>)` or `non_hsrp (not sure: <reason>)` instead. Match on the start of the text (`hsrp`, `non_hsrp`, `not sure`), not the whole value. Under 60 characters. |
 | `camera` | text | `entry` | Which camera saw it (multi-camera Pi). `""` on a single-camera Pi. |
 | `confidence` | number 0–1 | `0.9782` | How sure the reader is. 1 = fully sure. |
 | `votes` | whole number | `4` | How many camera frames agreed on this number. |
@@ -180,7 +180,7 @@ CREATE TABLE anpr_events (
     plate           VARCHAR(12)  NOT NULL,
     plate_display   VARCHAR(16)  NOT NULL,
     plate_type      VARCHAR(10)  NOT NULL,      -- standard | bh
-    hsrp            VARCHAR(10),                -- hsrp | non_hsrp | unsure | NULL
+    hsrp            VARCHAR(80),                -- hsrp | non_hsrp | NULL, or e.g. "not sure: text not found"
     camera          VARCHAR(40),                -- which camera (multi-camera Pi); "" if single
     confidence      DECIMAL(5,4) NOT NULL,
     votes           INTEGER      NOT NULL,

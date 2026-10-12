@@ -245,6 +245,6 @@ def test_repo_ground_truth_files_parse() -> None:
     root = Path(__file__).resolve().parents[1] / "training" / "ground_truth"
     gate_rows = read_truth(root / "gate_cam.csv")
     phone_rows = read_truth(root / "phone.csv")
-    assert len(gate_rows) == 22 and sum(v.sure for v in gate_rows) == 17
+    assert len(gate_rows) == 22 and sum(v.sure for v in gate_rows) == 18
     assert len(phone_rows) == 6 and all(v.sure for v in phone_rows)
     assert all(v.first_frame is not None for v in gate_rows)

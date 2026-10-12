@@ -12,6 +12,7 @@ import resource
 import signal
 import subprocess
 import sys
+import threading
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -62,7 +63,29 @@ def _leading_letters(text: str) -> int:
 
 
 PURGE_EVERY_S = 6 * 3600.0
+# A valid read with a character below this confidence (e.g. G read as 6 on a worn plate) is re-read a
+# few ways and replaced only by a clear majority (_majority_read). On 700 held-out test crops: 3 reads
+# fixed, none broken.
+LOW_CHAR_CONF = 0.7
+MAJORITY_MIN_VOTES = 3  # of the first read + 5 variant reads
 HSRP_MAX_LOOKS = 12  # HSRP check: looks kept per vehicle (~4 ms each on a Mac); enough to decide
+# The trained classifier (hsrp.method: model) is far surer per look but ~10x dearer (~200 ms on a Pi 3B+):
+# a few of the closest views are enough, and one confident look decides.
+HSRP_MODEL_MAX_LOOKS = 4
+_HSRP_MODELS: dict[tuple[str, float, float, bool], object] = {}  # one loaded classifier shared by all cameras
+_HSRP_MODELS_LOCK = threading.Lock()
+
+
+def _shared_hsrp_model(path: str, threshold: float, margin: float, two_line_marks: bool = False):
+    """The HSRP classifier for `path`, loaded once per process (ONNX Runtime sessions are thread-safe),
+    so a two-camera Pi holds one copy (~50 MB) instead of one per camera."""
+    from anpr.hsrp import HsrpModel
+
+    key = (str(path), threshold, margin, two_line_marks)
+    with _HSRP_MODELS_LOCK:
+        if key not in _HSRP_MODELS:
+            _HSRP_MODELS[key] = HsrpModel(path, threshold, margin, two_line_marks=two_line_marks)
+        return _HSRP_MODELS[key]
 EXIT_MEMORY = 3  # systemd restarts us
 EXIT_LICENCE = 4  # no valid licence for this device (or it ended while running)
 PREVIEW_TRACKED = (32, 176, 255)  # BGR amber (--signal): plate being read
@@ -119,7 +142,7 @@ class Engine:
         prepare: Callable[..., np.ndarray | None] | None = None,
         validator: PlateValidator | None = None,
         reread: Callable[..., np.ndarray | None] | None = None,
-        hsrp_look: Callable[[np.ndarray, Box], str | None] | None = None,
+        hsrp_look: Callable[[np.ndarray, Box], str | None | tuple[str | None, str]] | None = None,
         camera: str = "",
     ) -> None:
         self.cfg = cfg
@@ -160,15 +183,33 @@ class Engine:
         self._confirmed: dict[int, str] = {}
         # Per track: state+district heads read so far -> [reads, confidence sum, best confs, crop].
         self._heads: dict[int, dict[str, list]] = {}
-        # HSRP check: per track, (plate width, look "hsrp" / "non_hsrp" / None) per judged read.
+        # HSRP check: per track, (plate width, look "hsrp" / "non_hsrp" / None, why not judged) per
+        # read. `hsrp_look` returns a look, or (look, why) like anpr.hsrp.judge.
+        if hsrp_look is None and cfg.hsrp.enabled and cfg.hsrp.method == "model":
+            from pathlib import Path
+
+            if Path(cfg.hsrp.model_path).is_file():
+                c = cfg.hsrp
+                hsrp_look = _shared_hsrp_model(c.model_path, c.threshold, c.margin, c.two_line_marks)
+            else:
+                log.warning("hsrp: model %s not found, using the rule-based check", cfg.hsrp.model_path)
         if hsrp_look is None and cfg.hsrp.enabled:
             from functools import partial
 
-            from anpr.hsrp import look
+            from anpr.hsrp import judge
 
-            hsrp_look = partial(look, two_line=cfg.hsrp.two_line)
+            hsrp_look = partial(
+                judge,
+                two_line=cfg.hsrp.two_line,
+                weights=cfg.hsrp.weights.model_dump(),
+                rule=cfg.hsrp.rule,
+            )
         self.hsrp_look = hsrp_look
-        self._hsrp: dict[int, list[tuple[int, str | None]]] = {}
+        from anpr.hsrp import HsrpModel
+
+        self._hsrp_is_model = isinstance(hsrp_look, HsrpModel)
+        self._hsrp_max_looks = HSRP_MODEL_MAX_LOOKS if self._hsrp_is_model else HSRP_MAX_LOOKS
+        self._hsrp: dict[int, list[tuple[int, str | None, str]]] = {}
 
     def reset(self) -> None:
         """New stream: forget tracks, pending votes and the motion reference (a different scene).
@@ -229,15 +270,56 @@ class Engine:
         frames, so a single lucky second read cannot confirm a plate on its own."""
         wide = self.reread(frame, box, self.cfg.crop)
         if wide is None:
-            return None, crop
+            return self._variant_read(tid, text, crop)
         self.stats.rereads += 1
         second = self.ocr.read(wide)
         valid = self.validator.validate(second) if second is not None else None
         if valid is None:
-            return None, crop
+            return self._variant_read(tid, text, crop)
         self.stats.reread_fixes += 1
         log.debug("re-read track=%d %r -> %r", tid, text, valid.text)
         return valid, wide
+
+    def _variant_read(self, tid: int, text: str, crop: np.ndarray) -> tuple[ValidPlate | None, np.ndarray]:
+        """Last try for a read that failed the format check: read the crop a few slightly different
+        ways (tighter, padded, contrast, sharpened) and accept a plate only if at least two of those
+        reads agree exactly and no other plate is read as often. Never guesses: no agreement, no plate.
+        Costs ~5 extra reader runs, only for plates that could not be read otherwise."""
+        reads, best = self._variant_votes(crop)
+        top = reads.most_common(2)
+        if not top or top[0][1] < 2 or (len(top) > 1 and top[1][1] == top[0][1]):
+            return None, crop
+        self.stats.reread_fixes += 1
+        log.debug("variant read track=%d %r -> %r (%d agree)", tid, text, top[0][0], top[0][1])
+        return best[top[0][0]], crop
+
+    def _variant_votes(self, crop: np.ndarray) -> tuple[Counter[str], dict[str, ValidPlate]]:
+        """Valid plates read from the crop's variants (anpr.preprocess.read_variants): how often each
+        was read, and one ValidPlate per text."""
+        from anpr.preprocess import read_variants
+
+        reads: Counter[str] = Counter()
+        best: dict[str, ValidPlate] = {}
+        for v in read_variants(crop):
+            res = self.ocr.read(v)
+            valid = self.validator.validate(res) if res is not None else None
+            if valid is not None:
+                reads[valid.text] += 1
+                best.setdefault(valid.text, valid)
+        return reads, best
+
+    def _majority_read(self, tid: int, first: ValidPlate, crop: np.ndarray) -> ValidPlate:
+        """A valid read with an unsure character: read the crop a few ways and take another plate only
+        when it is a clear majority (>= MAJORITY_MIN_VOTES of the first read + the variants, and more
+        than any other). Otherwise the first read stands."""
+        reads, best = self._variant_votes(crop)
+        reads[first.text] += 1
+        (text, n), *rest = reads.most_common(2)
+        if text == first.text or n < MAJORITY_MIN_VOTES or (rest and rest[0][1] == n):
+            return first
+        self.stats.reread_fixes += 1
+        log.debug("majority read track=%d %r -> %r (%d votes)", tid, first.text, text, n)
+        return best[text]
 
     def _top_line_read(
         self, frame: np.ndarray, box: Box, tid: int, bottom: OcrResult
@@ -401,30 +483,40 @@ class Engine:
         if self.hsrp_look is None:
             return
         looks = self._hsrp.setdefault(tid, [])
-        if len(looks) >= HSRP_MAX_LOOKS:
+        if len(looks) >= self._hsrp_max_looks:
             smallest = min(range(len(looks)), key=lambda i: looks[i][0])
             if box.width <= looks[smallest][0]:
                 return
             del looks[smallest]
+        from anpr.hsrp import WHY_FAILED
+
+        why = ""
         try:
             look = self.hsrp_look(frame, box)
+            if isinstance(look, tuple):
+                look, why = look
         except Exception:  # noqa: BLE001 - an extra check must never cost the plate read
             log.debug("hsrp check failed track=%d", tid, exc_info=True)
-            look = None
-        looks.append((box.width, look))
+            look, why = None, WHY_FAILED
+        looks.append((box.width, look, why))
 
     def _hsrp_result(self, tid: int) -> str | None:
-        """HSRP / non-HSRP / not sure from the track's looks so far; None when the check is off."""
+        """HSRP / non-HSRP from the track's looks so far, or for a plate that could not be judged
+        e.g. "not sure: text not found" (anpr.hsrp.label); None when the check is off."""
         if self.hsrp_look is None:
             return None
-        from anpr.hsrp import decide
+        from anpr.hsrp import decide, label, why_unsure
 
         c = self.cfg.hsrp
-        looks = [look for _, look in self._hsrp.get(tid, [])]
-        result = decide(looks, min_marked=c.min_marked, min_clean=c.min_clean)
-        if result == "unsure" and c.unsure_as_non_hsrp:
-            return "non_hsrp"
-        return result
+        seen = self._hsrp.get(tid, [])
+        looks = [look for _, look, _ in seen]
+        # The classifier: one confident look decides (several looks still must agree, see decide()).
+        mm, mc = (1, 1) if self._hsrp_is_model else (c.min_marked, c.min_clean)
+        result = decide(looks, min_marked=mm, min_clean=mc)
+        if result != "unsure":
+            return result
+        reason = why_unsure(looks, [why for _, _, why in seen], mm, mc)
+        return label(result, reason, c.unsure_as_hsrp, c.unsure_as_non_hsrp)
 
     def _end_track(self, tr: Track, ts: float) -> PlateEvent | None:
         """A vehicle left: last chance with the stricter end-of-track rule, then forget the track."""
@@ -486,6 +578,8 @@ class Engine:
                 continue
             self._note_head(tid, result, crop)
             valid = self.validator.validate(result)
+            if valid is not None and result.char_confs and min(result.char_confs) < LOW_CHAR_CONF:
+                valid = self._majority_read(tid, valid, crop)
             if valid is None:
                 valid, whole = self._top_line_read(frame, box, tid, result)
                 if whole is not None:
@@ -829,8 +923,7 @@ def run_cameras(
                 return  # file mode: stop; live mode: reconnect after a short pause
 
     threads = [
-        threading.Thread(target=worker, args=(n, e, c), name=f"cam-{n}", daemon=True)
-        for n, e, c in pipelines
+        threading.Thread(target=worker, args=(n, e, c), name=f"cam-{n}", daemon=True) for n, e, c in pipelines
     ]
     log.info("multi-camera: starting %d cameras: %s", len(threads), ", ".join(names))
     for t in threads:

@@ -275,9 +275,32 @@
   const confClass = (c) => (c >= 0.85 ? "c-hi" : c >= 0.6 ? "c-mid" : "c-lo");
   const kindLabel = (k) => (k === "bh" ? "BH series" : k === "manual" ? "2-line · manual" : "Standard");
   // HSRP check (engine): hologram + "IND" left of the number. null = not checked (older event).
+  // A plate that could not be judged carries a short reason: "not sure: text not found", or with
+  // hsrp.unsure_as_hsrp / unsure_as_non_hsrp "hsrp (not sure: ...)" / "non_hsrp (not sure: ...)"
+  // (anpr.hsrp.label). Older events: "unsure (...)" or plain "unsure".
   const HSRP_UI = { hsrp: ["HSRP", " tag-ok"], non_hsrp: ["Non-HSRP", " tag-bad"], unsure: ["Not sure", ""] };
-  const hsrpLabel = (h) => (HSRP_UI[h] ? HSRP_UI[h][0] : "—");
-  const hsrpTag = (h) => el("span", "tag" + (HSRP_UI[h] ? HSRP_UI[h][1] : " tag-none"), hsrpLabel(h));
+  const hsrpParts = (h) => {
+    const n = /^not sure: (.*)$/.exec(h || "");
+    if (n) return ["unsure", n[1]];
+    const m = /^(\w+) \((.*)\)$/.exec(h || "");
+    return m ? [m[1], m[2]] : [h, ""];
+  };
+  const hsrpLabel = (h) => {
+    const [base, note] = hsrpParts(h);
+    const name = HSRP_UI[base] ? HSRP_UI[base][0] : "—";
+    return note ? name + " (" + note + ")" : name;
+  };
+  const hsrpTag = (h) => {
+    const [base, note] = hsrpParts(h);
+    const name = HSRP_UI[base] ? HSRP_UI[base][0] : "—";
+    // not sure: neutral tag (not the green/red of a judged plate), the reason below it
+    const tag = el("span", "tag" + (note ? "" : HSRP_UI[base] ? HSRP_UI[base][1] : " tag-none"), name);
+    if (!note) return tag;
+    const cell = el("span", "hsrp-cell");
+    cell.title = hsrpLabel(h);
+    cell.append(tag, el("small", "hsrp-note", note));
+    return cell;
+  };
   const num = (n) => Number(n).toLocaleString();
 
   // ---- building blocks --------------------------------------------------------------------------

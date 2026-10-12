@@ -528,17 +528,19 @@ def test_valid_first_read_never_rereads(cfg, store):
 
 def test_reread_that_also_fails_saves_nothing(cfg, store):
     det = FakeDetector([[pbox(400 + 10 * i)] for i in range(3)])
-    eng, calls = make_reread(cfg, store, det, FakeOcr(["HELLO"] * 6))
+    # first read, wider re-read and the 5 variant reads all fail the format check
+    eng, calls = make_reread(cfg, store, det, FakeOcr(["HELLO"] * 21))
     assert [e for i in range(3) for e in eng.process(FRAME, 1000 + i * 0.3)] == []
     assert eng.stats.rereads == 3 and eng.stats.reread_fixes == 0 and eng.stats.valid_reads == 0
 
 
 def test_no_wider_crop_means_no_second_read(cfg, store):
     det = FakeDetector([[pbox(400)]])
-    ocr = FakeOcr(["HELLO"])
+    ocr = FakeOcr(["HELLO"] * 6)
     eng, calls = make_reread(cfg, store, det, ocr, wide=False)
     assert eng.process(FRAME, 1000.0) == []
-    assert len(calls) == 1 and ocr.calls == 1 and eng.stats.rereads == 0
+    # no wider re-read; only the variant reads of the same crop (which all fail here)
+    assert len(calls) == 1 and ocr.calls == 6 and eng.stats.rereads == 0
 
 
 def test_injected_prepare_has_no_reread_by_default(cfg, store):
@@ -795,13 +797,24 @@ def test_failing_hsrp_check_never_costs_the_plate(cfg, store):
     det = FakeDetector([[pbox(400 + 10 * i)] for i in range(3)])
     eng, _ = make_hsrp(cfg, store, det, FakeOcr(["MH12AB1234"] * 3), [RuntimeError("boom")] * 3)
     events = [e for i in range(3) for e in eng.process(FRAME, 1000 + i * 0.3)]
-    assert [(e.plate, e.hsrp) for e in events] == [("MH12AB1234", "non_hsrp")]  # mark never seen
+    # no frame judged -> "not sure", with the reason
+    want = "not sure: check error"
+    assert [(e.plate, e.hsrp) for e in events] == [("MH12AB1234", want)]
 
 
-@pytest.mark.parametrize(("as_non", "want"), [(True, "non_hsrp"), (False, "unsure")])
-def test_plate_that_cannot_be_judged_is_non_hsrp_unless_switched_off(cfg, store, as_non, want):
+@pytest.mark.parametrize(
+    ("as_hsrp", "as_non", "want"),
+    [
+        (True, True, "hsrp (not sure: no image judged)"),
+        (True, False, "hsrp (not sure: no image judged)"),
+        (False, True, "non_hsrp (not sure: no image judged)"),
+        (False, False, "not sure: no image judged"),
+    ],
+)
+def test_plate_that_cannot_be_judged_says_not_sure(cfg, store, as_hsrp, as_non, want):
     # blurred / 2-line plate: no frame could be judged (looks are None)
-    cfg = cfg.model_copy(update={"hsrp": cfg.hsrp.model_copy(update={"unsure_as_non_hsrp": as_non})})
+    update = {"unsure_as_hsrp": as_hsrp, "unsure_as_non_hsrp": as_non}
+    cfg = cfg.model_copy(update={"hsrp": cfg.hsrp.model_copy(update=update)})
     det = FakeDetector([[pbox(400 + 10 * i)] for i in range(3)])
     eng, _ = make_hsrp(cfg, store, det, FakeOcr(["MH12AB1234"] * 3), [None] * 3)
     events = [e for i in range(3) for e in eng.process(FRAME, 1000 + i * 0.3)]
@@ -831,7 +844,10 @@ def test_real_hsrp_check_runs_by_default(cfg, store):
     det = FakeDetector([[pbox(400 + 10 * i)] for i in range(3)])
     eng = make(cfg, store, det, FakeOcr(["MH12AB1234"] * 3))
     events = [e for i in range(3) for e in eng.process(FRAME, 1000 + i * 0.3)]
-    assert [(e.plate, e.hsrp) for e in events] == [("MH12AB1234", "non_hsrp")]  # black frame: mark not seen
+    # black frame: can't be judged -> "not sure" with a short reason (model: nothing to see; rules: no text)
+    assert [(e.plate, e.hsrp) for e in events] in (
+        [("MH12AB1234", "not sure: low contrast")], [("MH12AB1234", "not sure: text not found")]
+    )
 
 
 def test_hsrp_check_stops_after_enough_looks(tmp_path):
@@ -852,8 +868,72 @@ def test_hsrp_check_stops_after_enough_looks(tmp_path):
         # first 12 frames judged; later ones (not bigger than the smallest kept) are skipped, but
         # the 4 far-away frames were each replaced by a bigger one before that
         kept = eng._hsrp[next(iter(eng._hsrp))]
-        assert len(kept) == HSRP_MAX_LOOKS and min(w for w, _ in kept) == 200
+        assert len(kept) == HSRP_MAX_LOOKS and min(w for w, _, _ in kept) == 200
         assert len(seen) == HSRP_MAX_LOOKS + 4
         assert eng._hsrp_result(next(iter(eng._hsrp))) == "hsrp"
     finally:
         store.close()
+
+
+def test_engine_passes_the_hsrp_rule_to_the_check(tmp_path):
+    from anpr.config import HsrpConfig
+
+    for rule in ("any", "close", "far"):
+        cfg = AppConfig(
+            storage=StorageConfig(db_path=tmp_path / f"{rule}.db", image_dir=tmp_path / "img"),
+            hsrp=HsrpConfig(rule=rule, method="rules"),
+        )
+        store = SqliteEventStore(cfg.storage.db_path, cfg.storage.image_dir)
+        try:
+            eng = make(cfg, store, FakeDetector([]), FakeOcr([]))
+            assert eng.hsrp_look.keywords["rule"] == rule
+        finally:
+            store.close()
+    assert HsrpConfig().rule == "close"
+
+
+def test_variant_read_needs_two_agreeing_reads(cfg, store):
+    """A read that failed the format check is re-read a few ways; a plate is accepted only when
+    at least two of those reads agree exactly (never a single lucky read)."""
+    from anpr.types import OcrResult
+
+    eng = make(cfg, store, FakeDetector([]), FakeOcr([]))
+    crop = np.full((40, 160, 3), 200, np.uint8)
+    conf = (0.9,) * 10
+
+    class Seq:
+        def __init__(self, texts):
+            self.texts = list(texts)
+
+        def read(self, _img):
+            t = self.texts.pop(0) if self.texts else ""
+            return OcrResult(t, conf[: len(t)]) if t else None
+
+    eng.ocr = Seq(["MH12AB1234", "XX", "MH12AB1234", "", ""])
+    valid, _ = eng._variant_read(1, "MH12AB12", crop)
+    assert valid is not None and valid.text == "MH12AB1234"
+    eng.ocr = Seq(["MH12AB1234", "KA01MX0001", "", "", ""])  # one each: no agreement, no plate
+    assert eng._variant_read(1, "MH12AB12", crop)[0] is None
+
+
+def test_majority_read_replaces_an_unsure_valid_read_only_on_a_clear_majority(cfg, store):
+    """A valid read with an unsure character (G read as 6 on a worn plate) is re-read a few ways: a
+    clear majority of the first read + the variants wins, otherwise the first read stands."""
+    from anpr.types import OcrResult, ValidPlate
+
+    eng = make(cfg, store, FakeDetector([]), FakeOcr([]))
+    crop = np.full((40, 160, 3), 200, np.uint8)
+
+    class Seq:
+        def __init__(self, texts):
+            self.texts = list(texts)
+
+        def read(self, _img):
+            t = self.texts.pop(0) if self.texts else ""
+            return OcrResult(t, (0.9,) * len(t)) if t else None
+
+    first = ValidPlate("DL16C8473", "standard", 0.94)
+    eng.ocr = Seq(["DL1GC8473", "DL1GC8473", "DL1GC8473", "DL16C8473", ""])
+    assert eng._majority_read(1, first, crop).text == "DL1GC8473"
+    eng.ocr = Seq(["DL1GC8473", "DL1GC8473", "DL16C8473", "", ""])  # 2 vs 2: no clear majority
+    assert eng._majority_read(1, first, crop).text == "DL16C8473"

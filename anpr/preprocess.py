@@ -31,6 +31,10 @@ MAX_CORNER_ANGLE = 120.0
 MAX_SIDE_RATIO = 2.0  # opposite sides may differ this much (steep side view: near edge looks taller)
 # Blank border kept around the warped plate: OCR drops characters that touch the image edge.
 WARP_MARGIN = 0.06
+# The sharpness gate measures plates at most this wide: a big or zoomed-in plate (camera close-up,
+# upscaled PlateImg) spreads every edge over many pixels, so at full size it would look blurred.
+# Plates up to this width are measured as they are.
+SHARPNESS_MAX_W = 240
 MIN_OUTPUT_STD = 12.0  # a warped plate must still have contrast (text on background)
 
 
@@ -61,6 +65,17 @@ def sharpness(img: np.ndarray) -> float:
     """Variance of the Laplacian (higher = sharper). Accepts BGR or gray."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
     return float(cv2.Laplacian(gray, cv2.CV_32F).var())
+
+
+def plate_sharpness(img: np.ndarray) -> float:
+    """`sharpness` of a plate crop measured at most SHARPNESS_MAX_W wide, so the result does not
+    depend on how big the plate is in the picture."""
+    h, w = img.shape[:2]
+    if w > SHARPNESS_MAX_W:
+        img = cv2.resize(
+            img, (SHARPNESS_MAX_W, max(1, round(h * SHARPNESS_MAX_W / w))), interpolation=cv2.INTER_AREA
+        )
+    return sharpness(img)
 
 
 def _order_corners(pts: np.ndarray) -> np.ndarray:
@@ -320,7 +335,7 @@ def prepare_plate(frame: np.ndarray, box: Box, cfg: CropConfig) -> np.ndarray | 
     if box.width < cfg.min_width_px:
         return None
     inner = crop_plate(frame, box, 0.0)
-    if inner is None or sharpness(inner) < cfg.min_sharpness:
+    if inner is None or plate_sharpness(inner) < cfg.min_sharpness:
         return None
     if cfg.deshear:
         flat = deshear_plate(frame, box)
@@ -332,3 +347,20 @@ def prepare_plate(frame: np.ndarray, box: Box, cfg: CropConfig) -> np.ndarray | 
     if cfg.deskew:
         crop = deskew(crop)
     return enhance(crop, cfg.clahe_clip)
+
+
+def read_variants(crop: np.ndarray) -> list[np.ndarray]:
+    """Slightly different versions of a plate crop for a last re-read (anpr.engine._variant_read):
+    trimmed edges (frame / bolts), a little padding, local contrast, and sharpened."""
+    h, w = crop.shape[:2]
+    if h < 8 or w < 16:
+        return []
+    out = []
+    for p in (0.04, 0.08):
+        out.append(crop[int(h * p) : h - int(h * p), int(w * p / 2) : w - int(w * p / 2)])
+    ph, pw = int(h * 0.06), int(w * 0.03)
+    out.append(cv2.copyMakeBorder(crop, ph, ph, pw, pw, cv2.BORDER_REPLICATE))
+    gray = crop if crop.ndim == 2 else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    out.append(cv2.cvtColor(_clahe(3.0).apply(gray), cv2.COLOR_GRAY2BGR))
+    out.append(cv2.filter2D(crop, -1, np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], np.float32)))
+    return out

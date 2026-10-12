@@ -586,7 +586,7 @@ def test_a_trickled_body_is_cut_off_and_frees_its_slot(monkeypatch):
 
 def test_ingest_engine_judges_hsrp_from_a_single_image():
     """A camera POST gives 1-2 reads: one image showing the hologram must give "hsrp", not the
-    video rule's "unsure" (which unsure_as_non_hsrp then reports as non-HSRP)."""
+    video rule's "unsure" (saved as "not sure: ...")."""
     from anpr.hsrp import decide
 
     cfg = AppConfig()
@@ -684,3 +684,143 @@ def test_zoom_retry_skipped_when_first_pass_reads(store, _crop_by_box):
     eng = _tile_engine(store, _BoxOcr({200: "MH12AB1234", 20: "DL1MA1846"}))
     assert [e.plate for e in ingest.process_group(eng, [_jpeg_bytes(400, 400)], None)] == ["MH12AB1234"]
     assert eng.detector.calls == 1
+
+
+def test_ingest_exits_cleanly_above_the_memory_limit(tmp_path, monkeypatch):
+    """Heavy load on the Pi: above runtime.max_rss_mb the receiver stops itself (drains, returns
+    EXIT_MEMORY so systemd restarts it) instead of being killed by MemoryMax mid-write."""
+    import anpr.engine as engine_mod
+    from anpr.config import RuntimeConfig, StorageConfig
+
+    cfg = AppConfig(
+        ingest=IngestConfig(enabled=True, host="127.0.0.1", port=8761),
+        storage=StorageConfig(db_path=tmp_path / "a.db", image_dir=tmp_path / "img"),
+        runtime=RuntimeConfig(max_rss_mb=100.0, status_interval_s=0.1),
+    )
+    store = SqliteEventStore(cfg.storage.db_path, cfg.storage.image_dir)
+    monkeypatch.setattr(engine_mod, "current_rss_mb", lambda: 999.0)
+    monkeypatch.setattr(ingest, "_build_engine", lambda *a: __import__("types").SimpleNamespace())
+    try:
+        t0 = time.monotonic()
+        code = ingest.run_ingest(cfg, store, None, None, stop=lambda: time.monotonic() - t0 > 10)
+        assert code == engine_mod.EXIT_MEMORY
+        assert time.monotonic() - t0 < 5
+    finally:
+        store.close()
+
+
+def test_image_size_reads_the_header():
+    img = np.zeros((300, 500, 3), np.uint8)
+    for ext in (".jpg", ".png"):
+        raw = cv2.imencode(ext, img)[1].tobytes()
+        assert ingest.image_size(raw) == (500, 300)
+    assert ingest.image_size(b"not an image") is None
+
+
+@pytest.mark.parametrize(("w", "h"), [(4000, 3000), (3000, 4000), (1280, 720), (8000, 600)])
+def test_big_pictures_are_decoded_small(w, h):
+    """A 12 MP phone photo must not take 36 MB per POST on the Pi: long side capped at 1920."""
+    img = np.full((h, w, 3), 128, np.uint8)
+    cv2.putText(img, "TEST", (w // 3, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 5, (0, 0, 0), 10)
+    out = ingest.decode_image(cv2.imencode(".jpg", img)[1].tobytes())
+    assert max(out.shape[:2]) == min(max(w, h), ingest.MAX_IMAGE_SIDE)
+    assert abs(out.shape[1] / out.shape[0] - w / h) < 0.02  # same shape, just smaller
+
+
+# ---- fast_ack: reply at once, read from a disk queue ----
+
+
+def test_spool_keeps_vehicles_until_read(tmp_path):
+    sp = ingest.Spool(tmp_path / "spool", max_items=2)
+    a = sp.put([b"img-a1", b"img-a2"], "entry", "V1")
+    sp.put([b"img-b"], None, None)
+    assert a and len(sp) == 2
+    assert sp.put([b"img-c"], None, None) is None  # full -> the camera gets 503 and re-sends
+    first = sp.pending()[0]
+    assert sp.load(first) == ([b"img-a1", b"img-a2"], "entry", "V1")
+    # a restart: a new Spool on the same folder still has both (nothing acknowledged is lost)
+    assert len(ingest.Spool(tmp_path / "spool", max_items=2)) == 2
+    sp.done(first)
+    assert len(sp) == 1 and len(sp.pending()) == 1
+
+
+def test_spool_drops_half_written_posts(tmp_path):
+    (tmp_path / "spool" / "123-000001.tmp").mkdir(parents=True)  # crash while writing: never acked
+    sp = ingest.Spool(tmp_path / "spool", max_items=10)
+    assert len(sp) == 0 and not list((tmp_path / "spool").glob("*.tmp"))
+
+
+def test_spool_worker_reads_in_order_and_retries_then_parks_bad_posts(tmp_path):
+    import threading
+
+    sp = ingest.Spool(tmp_path / "spool", max_items=10)
+    for name in ("one", "bad", "two"):
+        sp.put([name.encode()], None, None)
+    seen = []
+
+    def vote(images, camera, vid):
+        seen.append(images[0])
+        if images[0] == b"bad":
+            raise ValueError("broken image")
+
+    stop = threading.Event()
+    t = threading.Thread(target=ingest._spool_worker, args=(sp, vote, stop), daemon=True)
+    t.start()
+    deadline = time.time() + 5
+    while len(sp) and time.time() < deadline:
+        time.sleep(0.02)
+    stop.set()
+    t.join(2)
+    assert seen[0] == b"one" and seen.count(b"bad") == ingest.Spool.MAX_TRIES and b"two" in seen
+    assert len(sp) == 0 and len(list((tmp_path / "spool" / "failed").iterdir())) == 1
+
+
+def test_fast_ack_replies_at_once_and_reads_in_the_background(tmp_path, monkeypatch):
+    import threading
+
+    from anpr.config import StorageConfig
+
+    cfg = AppConfig(
+        ingest=IngestConfig(
+            enabled=True, host="127.0.0.1", port=8762, fast_ack=True, respond_with_plate=True
+        ),
+        storage=StorageConfig(db_path=tmp_path / "a.db", image_dir=tmp_path / "img"),
+    )
+    read = []
+
+    def slow_vote(engine, images, camera, duplicates=None):  # reading a plate takes ~1 s on a Pi
+        time.sleep(0.5)
+        read.append(len(images))
+        return []
+
+    monkeypatch.setattr(ingest, "_build_engine", lambda *a: __import__("types").SimpleNamespace())
+    monkeypatch.setattr(ingest, "process_group", slow_vote)
+    store = SqliteEventStore(cfg.storage.db_path, cfg.storage.image_dir)
+    stop = threading.Event()
+    t = threading.Thread(
+        target=ingest.run_ingest, args=(cfg, store, None, None), kwargs={"stop": stop.is_set}
+    )
+    t.start()
+    try:
+        for _ in range(50):
+            try:
+                urllib.request.urlopen("http://127.0.0.1:8762/health", timeout=1)
+                break
+            except OSError:
+                time.sleep(0.1)
+        times = []
+        for _ in range(3):
+            t0 = time.perf_counter()
+            code, body = _post(8762, "/api/v1/ingest", {"BgImg": _jpeg_b64()})
+            times.append(time.perf_counter() - t0)
+            assert code == 200 and body["queued"] is True and body["id"]
+        assert max(times) < 0.1  # the camera is answered without waiting for the read
+        deadline = time.time() + 5
+        while len(read) < 3 and time.time() < deadline:
+            time.sleep(0.05)
+        assert read == [1, 1, 1]  # every queued vehicle was read, nothing lost
+        assert not list((tmp_path / "spool").glob("*.post"))
+    finally:
+        stop.set()
+        t.join(10)
+        store.close()

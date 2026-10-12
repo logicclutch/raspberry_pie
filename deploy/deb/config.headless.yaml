@@ -64,13 +64,27 @@ vote:
   settle_s: 1.0        # decide once the plate stopped growing for 1 s (vehicle close/stopped) or left
   settle_growth: 0.05
 hsrp:
-  # Mark each saved plate HSRP / Non-HSRP / Not sure (hologram + "IND" left of the number).
-  # 2-line plates and plates too small or blurred to judge show "Not sure".
+  # Mark each saved plate HSRP / Non-HSRP (hologram + "IND" left of the number). A plate that
+  # can't be judged (too small, blurred, ...) is saved as "not sure: <reason>", e.g.
+  # "not sure: text not found".
   enabled: true
   min_marked: 2
   min_clean: 3
-  unsure_as_non_hsrp: true  # only plates where the mark is seen count as HSRP
-  two_line: false  # also judge 2-line plates; turn on only with a clear, close (ideally colour) camera view
+  # model = trained classifier (models/hsrp/hsrp_cls.onnx, 97.9% on held-out Indian photos); rules = the
+  # hand-written checks below (rule / two_line). Missing model file -> rules.
+  method: model
+  model_path: models/hsrp/hsrp_cls.onnx
+  threshold: 0.5   # classifier says HSRP at or above this
+  margin: 0.1      # this close to the threshold -> "not sure: model unsure"
+  two_line_marks: true  # 2-line plate the model misses: hologram + "IND" found -> hsrp
+  # Which checks must pass for HSRP (method: rules only):
+  #   close: hologram AND "IND"                  - clear, close camera view
+  #   far:   "IND" AND one of hologram/blue/font - camera far away, night or IR
+  #   any:   any one check (old; the font check alone marks a plate HSRP)
+  rule: close
+  unsure_as_hsrp: false  # true: save "not sure" plates as "hsrp (not sure: <reason>)"
+  unsure_as_non_hsrp: false  # true: as "non_hsrp (not sure: <reason>)"; both false: "not sure: <reason>"
+  two_line: true  # also judge 2-line plates (trucks, bikes); best with a clear, close camera view
 push:
   # Send every confirmed plate to the client's server. When this section is here it is the source of
   # truth: these values are applied on every restart (edit the file, then restart). Remove the whole
@@ -87,14 +101,14 @@ storage:
   retention_days: 30.0
   snapshot_width: 640
 web:
-  enabled: false        # headless: no dashboard/API is run at all (plates still go to the client API)
+  enabled: false        # dashboard OFF (installed); turn on: sudo /opt/anpr/bin/anpr dashboard on
   station_name: Gate 1
   host: 0.0.0.0
   port: 8000
   auth_token: null
   admin_token: null   # admin password for Activate / Settings / Add stream (the Pi installer sets one)
 runtime:
-  max_rss_mb: 850.0         # headless frees the dashboard's RAM; room for up to two cameras
+  max_rss_mb: 680.0         # stop cleanly + restart above this (service MemoryMax=750M); fits two cameras
   status_interval_s: 2.0
   preview_interval_s: 0     # headless: no dashboard, so no live-view pictures are made
   preview_width: 640

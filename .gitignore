@@ -27,3 +27,7 @@ training/data/
 /vlc-record-*
 *.mp4
 .claude/
+
+# screenshots and temporary configs
+/Screenshot*
+config.*.tmp.yaml

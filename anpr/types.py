@@ -60,7 +60,8 @@ class PlateEvent:
     crop_path: str | None = None  # relative to storage image_dir
     snapshot_path: str | None = None  # relative to storage image_dir
     id: int | None = None  # set by the store
-    # "hsrp" | "non_hsrp" | "unsure" (see anpr.hsrp); None = not checked (check off, or older event)
+    # "hsrp" | "non_hsrp", or for a plate that could not be judged "not sure: <reason>" (or with
+    # hsrp.unsure_as_hsrp / unsure_as_non_hsrp "hsrp (not sure: ...)"; anpr.hsrp.label); None = off
     hsrp: str | None = None
     # Which camera saw it (multi-camera installs). "" / None = the single default camera.
     camera: str | None = None

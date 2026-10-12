@@ -1,0 +1,69 @@
+{
+  "passed": false,
+  "rules": [
+    "OK   video wrong plates: candidate 0 <= baseline 0",
+    "FAIL video correct plates: candidate 22 >= baseline 23",
+    "OK   video precision: candidate 1.0000 >= 0.0",
+    "OK   no new plates on unsure vehicles",
+    "FAIL crop test ran (no labelled held-out crops: label the test videos' crops, or --crops)",
+    "FAIL candidate strictly better somewhere (more correct, fewer wrong, or higher crop accuracy)"
+  ],
+  "meta": {
+    "baseline": "/Users/ibm/Desktop/raspberry-main/models/ocr/plate_ocr.onnx",
+    "candidate": "/Users/ibm/Desktop/raspberry-main/models/ocr/candidates/india-v5/plate_ocr.onnx",
+    "config": "/Users/ibm/Desktop/raspberry-main/config.yaml",
+    "truth": "/Users/ibm/Desktop/raspberry-main/training/ground_truth/gate_cam.csv, /Users/ibm/Desktop/raspberry-main/training/ground_truth/phone.csv",
+    "crops": "(none)"
+  },
+  "baseline": {
+    "video": {
+      "sure": 24,
+      "correct": 23,
+      "wrong": 0,
+      "unscored": 2,
+      "missed": [
+        "RJ02CG6293"
+      ],
+      "wrong_reads": [],
+      "unscored_reads": [
+        [
+          "vlc-record-2026-09-28-14h52m53s-rtsp___192.168.5.53_554_avstream_channel=1_stream=1.sdp-.mp4",
+          "HR63D8065"
+        ],
+        [
+          "vlc-record-2026-09-28-14h52m53s-rtsp___192.168.5.53_554_avstream_channel=1_stream=1.sdp-.mp4",
+          "RJ14UN8156"
+        ]
+      ],
+      "confusions": {},
+      "precision": 1.0,
+      "recall": 0.9583333333333334
+    }
+  },
+  "candidate": {
+    "video": {
+      "sure": 24,
+      "correct": 22,
+      "wrong": 0,
+      "unscored": 2,
+      "missed": [
+        "RJ40GA7317",
+        "RJ52GA6273"
+      ],
+      "wrong_reads": [],
+      "unscored_reads": [
+        [
+          "vlc-record-2026-09-28-14h52m53s-rtsp___192.168.5.53_554_avstream_channel=1_stream=1.sdp-.mp4",
+          "HR63D8065"
+        ],
+        [
+          "vlc-record-2026-09-28-14h52m53s-rtsp___192.168.5.53_554_avstream_channel=1_stream=1.sdp-.mp4",
+          "RJ14UN8156"
+        ]
+      ],
+      "confusions": {},
+      "precision": 1.0,
+      "recall": 0.9166666666666666
+    }
+  }
+}
