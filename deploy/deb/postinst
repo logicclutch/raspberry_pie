@@ -26,6 +26,10 @@ elif ! grep -qE '^  admin_token:' "$APP/config.yaml"; then
   NEW_ADMIN=$("$APP/.venv/bin/python" -c 'import secrets; print(secrets.token_urlsafe(12))')
   sed -i -E "s|^(  auth_token:.*)$|\1\n  admin_token: $NEW_ADMIN   # admin password (Activate / Settings / Add stream)|" "$APP/config.yaml"
 fi
+# A build with a fixed HSRP method (HSRP_METHOD=font) applies it to the kept config.yaml too.
+if [ -f "$APP/HSRP_METHOD" ]; then
+  sed -i -E "/^hsrp:/,/^[a-z]/ s|^  method: .*|  method: $(cat "$APP/HSRP_METHOD")|" "$APP/config.yaml"
+fi
 chown anpr:anpr "$APP/config.yaml"
 chmod 640 "$APP/config.yaml"
 [ ! -f "$APP/licence.json" ] || chown anpr:anpr "$APP/licence.json"
@@ -69,6 +73,7 @@ DEVID=$("$APP/bin/anpr" engine --machine-id 2>/dev/null || echo '?')
 echo ""
 echo "ANPR $(cat "$APP/VERSION") installed in $APP"
 echo "  device ID:  $DEVID  (send it to the supplier for the licence)"
+[ ! -f "$APP/HSRP_METHOD" ] || echo "  HSRP check: $(cat "$APP/HSRP_METHOD")  (hsrp.method in $APP/config.yaml)"
 if [ "$MODE" = "ingest" ]; then
   PORT=$("$APP/.venv/bin/python" - "$APP/config.yaml" <<'PY' 2>/dev/null || echo 8080
 import sys, yaml

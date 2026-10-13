@@ -82,6 +82,12 @@ IND_MIN, IND_MAX = 0.08, 0.4  # size of one "IND" letter, in character heights
 BLUE_HUE = (90, 130)  # OpenCV hue (0-180) of the blue hologram / "IND" ink
 BLUE_MIN_SAT = 70  # 0-255: white plate under a bluish light is not "blue ink"
 BLUE_MIN_AREA = 0.01  # smallest blue patch, in character heights squared
+FONT_SAMPLE_CHARS = 3  # hsrp.method: font - only these first characters of the top line are measured
+FONT_LETTER_HEIGHT_TOL = 0.1  # a blob this far from the line's median letter height is not a letter
+FONT_PIXEL_SLACK = 1.5  # font limits widen by this many real pixels (a 20 px letter: +7.5%)
+FONT_JOINED_HEIGHT = (0.45, 0.95)  # a top+bottom letter joined into one blob: this much of the plate tall
+FONT_JOINED_MAX_W = 0.35  # ... and narrow (the plate's frame is wider)
+FONT_SPLIT_BAND = (0.3, 0.7)  # where in such a blob the two letters meet
 FONT_MIN_CHARS = 6  # Indian plates have 8-10 characters; fewer found = can't compare them
 FONT_MAX_HEIGHT_CV = 0.05  # character heights vary by at most 5%
 FONT_MAX_STROKE_CV = 0.15  # stroke thickness varies by at most 15%
@@ -273,15 +279,18 @@ def _has_blue(color: np.ndarray | None, region: tuple[int, int, int, int], m: fl
     return False
 
 
-def _standard_font(binary: np.ndarray, lines: list[list[Char]]) -> bool:
+def _standard_font(
+    binary: np.ndarray, lines: list[list[Char]], min_chars: int = FONT_MIN_CHARS, slack: float = 0.0
+) -> bool:
     """HSRP characters: one standard, bold, embossed font - every character the same height and the
     same stroke thickness. Painted / fancy plates vary. Weak: a neatly printed non-HSRP plate passes
-    it too."""
+    it too. `slack`: extra tolerance (fraction of the character height) for a plate so small that one
+    pixel is several percent of a letter."""
     chars = [c for g in lines for c in g]
-    if len(chars) < FONT_MIN_CHARS:
+    if len(chars) < min_chars:
         return False
     hs = np.array([c[3] for c in chars], float)
-    if hs.std() / hs.mean() > FONT_MAX_HEIGHT_CV:
+    if hs.std() / hs.mean() > FONT_MAX_HEIGHT_CV + slack:
         return False
     dist = cv2.distanceTransform(binary, cv2.DIST_L2, 3)
     strokes = []
@@ -292,9 +301,9 @@ def _standard_font(binary: np.ndarray, lines: list[list[Char]]) -> bool:
             return False
         strokes.append(2.0 * float(np.percentile(d, 90)))
     s = np.array(strokes)
-    if s.std() / s.mean() > FONT_MAX_STROKE_CV:
+    if s.std() / s.mean() > FONT_MAX_STROKE_CV + slack:
         return False
-    return bool(FONT_STROKE[0] <= s.mean() / hs.mean() <= FONT_STROKE[1])
+    return bool(FONT_STROKE[0] - slack <= s.mean() / hs.mean() <= FONT_STROKE[1] + slack)
 
 
 def score(found: dict[str, bool], weights: Mapping[str, float] | None = None) -> float:
@@ -485,6 +494,8 @@ CROP_MX, CROP_MY = 0.12, 0.30  # margin around the plate box: fraction of its wi
 _MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 _STD = np.array([0.229, 0.224, 0.225], np.float32)
 WHY_LOW_CONF = "model unsure"  # the classifier's answer was too close to the threshold
+WHY_VIEWS_DISAGREE = "images disagree"  # one image weakly HSRP, another not (no image strongly HSRP)
+STRONG_P = 0.9  # a classifier answer this sure is HSRP even when another image of the vehicle says not
 MIN_CROP_STD = 8.0  # grey-level spread below which a plate crop shows nothing to judge
 
 
@@ -535,7 +546,10 @@ class HsrpModel:
         self.two_line_marks = two_line_marks
         log.info(
             "hsrp: classifier %s threshold=%.2f margin=%.2f two_line_marks=%s",
-            path, threshold, margin, two_line_marks,
+            path,
+            threshold,
+            margin,
+            two_line_marks,
         )
 
     def probability(self, frame: np.ndarray, box: Box) -> float | None:
@@ -550,26 +564,121 @@ class HsrpModel:
         return float(e[1] / e.sum())
 
     def __call__(self, frame: np.ndarray, box: Box) -> tuple[HsrpLook | None, str]:
+        look, why, _ = self.judge(frame, box)
+        return look, why
+
+    def judge(self, frame: np.ndarray, box: Box) -> tuple[HsrpLook | None, str, float | None]:
+        """`__call__` plus the classifier's p (None when it did not run), so a vehicle with several images
+        can tell a sure HSRP image (p >= STRONG_P) from a weak one."""
         crop = model_crop(frame, box)
         if crop is None:
-            return None, WHY_NO_PLATE
+            return None, WHY_NO_PLATE, None
         # Nothing to see (black / blank / washed-out picture): the classifier would still give an answer.
         if float(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY).std()) < MIN_CROP_STD:
-            return None, WHY_LOW_CONTRAST
+            return None, WHY_LOW_CONTRAST, None
         p = self.probability(frame, box)
         if p is None:
-            return None, WHY_NO_PLATE
+            return None, WHY_NO_PLATE, None
         log.debug("hsrp model p=%.3f", p)
         if p >= self.threshold + self.margin:
-            return "hsrp", ""
+            return "hsrp", "", p
         if self.two_line_marks and self._two_line_marked(frame, box):
             log.debug("hsrp model p=%.3f overruled: 2-line plate shows hologram + IND", p)
-            return "hsrp", ""
+            return "hsrp", "", p
         if abs(p - self.threshold) < self.margin:
-            return None, WHY_LOW_CONF
-        return "non_hsrp", ""
+            return None, WHY_LOW_CONF, p
+        return "non_hsrp", "", p
 
     @staticmethod
     def _two_line_marked(frame: np.ndarray, box: Box) -> bool:
         found = conditions_or_reason(frame, box, two_line=True, only_two_line=True)
         return not isinstance(found, str) and passes(found, "close")
+
+
+def _split_lines(binary: np.ndarray) -> tuple[np.ndarray, tuple[float, list[list[Char]]]] | None:
+    """A 2-line plate whose lines touch (small, blurred or tilted picture): a top-line letter joins
+    the one below it into one blob about two lines tall. Cut each such blob at its thinnest row
+    (where the two letters meet), drop what touches the picture's edge and look for the lines
+    again. (cut binary, _lines result) or None."""
+    h, w = binary.shape
+    cut = binary.copy()
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    joined = 0
+    for i in range(1, n):
+        x, y, bw, bh, _ = (int(v) for v in stats[i])
+        if not (FONT_JOINED_HEIGHT[0] * h <= bh <= FONT_JOINED_HEIGHT[1] * h and bw <= FONT_JOINED_MAX_W * w):
+            continue  # not two letters on top of each other (a frame edge, a single letter)
+        mask = labels[y : y + bh, x : x + bw] == i
+        lo, hi = int(FONT_SPLIT_BAND[0] * bh), int(FONT_SPLIT_BAND[1] * bh)
+        row = y + lo + int(np.argmin(mask[lo:hi].sum(axis=1)))
+        band = cut[row - 1 : row + 2, x : x + bw]
+        band[labels[row - 1 : row + 2, x : x + bw] == i] = 0
+        joined += 1
+    if not joined:
+        return None
+    # A picture this poor also has background (wall, bumper) in the box: blobs touching its edge are
+    # not characters.
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(cut, connectivity=8)
+    for i in range(1, n):
+        x, y, bw, bh, _ = (int(v) for v in stats[i])
+        if x == 0 or y == 0 or x + bw == w or y + bh == h:
+            cut[labels == i] = 0
+    found = _lines(cut)
+    if found is None or len(found[1]) != 2:
+        return None
+    return cut, found
+
+
+class FontCheck:
+    """HSRP from the character font alone (config hsrp.method: font): "hsrp" when the first
+    FONT_SAMPLE_CHARS characters of the top line are in one uniform, bold standard font
+    (_standard_font), "non_hsrp" when they are not, None (with the reason) when they cannot be
+    measured. Callable like `judge`; judge() adds p (1.0 / 0.0) so
+    one HSRP-font plate of a vehicle counts as sure (anpr.engine, whole-vehicle ingest).
+    `fallback` (an HsrpModel): its answer when the font cannot be measured (letters not found,
+    picture too small or blurred), instead of "not sure"."""
+
+    def __init__(self, fallback=None) -> None:
+        self.fallback = fallback
+
+    def __call__(self, frame: np.ndarray, box: Box) -> tuple[HsrpLook | None, str]:
+        look, why, _ = self.judge(frame, box)
+        return look, why
+
+    def judge(self, frame: np.ndarray, box: Box) -> tuple[HsrpLook | None, str, float | None]:
+        look, why, p = self._font(frame, box)
+        if look is None and self.fallback is not None:
+            return self.fallback.judge(frame, box)
+        return look, why, p
+
+    def _font(self, frame: np.ndarray, box: Box) -> tuple[HsrpLook | None, str, float | None]:
+        # Only the characters are measured: no room left of the text is needed (that is where the
+        # hologram / "IND" would be), so a camera's tight plate crop can be judged too.
+        images = _plate_image(frame, box)
+        if images is None:
+            return None, WHY_NO_PLATE, None
+        gray, _ = images
+        binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 31, 10)
+        found_lines = _lines(binary)
+        if found_lines is None:
+            split = _split_lines(binary)
+            if split is None:
+                return None, WHY_NO_TEXT, None
+            binary, found_lines = split
+        if float(gray.std()) < MIN_CROP_STD:
+            return None, WHY_LOW_CONTRAST, None
+        # Only the first FONT_SAMPLE_CHARS characters of the top line (usually the state letters, "DL1").
+        # Blobs that are not letter-height (the hologram or a bolt next to the "D") are skipped first.
+        top = found_lines[1][0]
+        h_mid = float(np.median([c[3] for c in top]))
+        letters = [c for c in top if abs(c[3] - h_mid) <= FONT_LETTER_HEIGHT_TOL * h_mid]
+        sample = sorted(letters, key=lambda c: c[0])[:FONT_SAMPLE_CHARS]
+        if len(sample) < FONT_SAMPLE_CHARS:
+            return None, WHY_NO_TEXT, None
+        # Measurement tolerance in REAL pixels: a letter only ~20 px tall in the camera picture is
+        # scaled up to WORK_W here, and 1-2 px of blur or dirt there is 5-10% of its height.
+        src_height = h_mid * (box.x2 - box.x1) / WORK_W
+        slack = FONT_PIXEL_SLACK / src_height if src_height > 0 else 0.0
+        if _standard_font(binary, [sample], min_chars=FONT_SAMPLE_CHARS, slack=slack):
+            return "hsrp", "", 1.0
+        return "non_hsrp", "", 0.0

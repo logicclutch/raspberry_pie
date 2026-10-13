@@ -170,7 +170,10 @@ class HsrpConfig(_Section):
     # model: a small trained classifier looks at the plate (anpr.hsrp.HsrpModel, models/hsrp/); much
     #   more accurate than the hand-written checks. rules: the hand-written checks below (rule,
     #   weights, two_line). If the model file is missing, the rules are used.
-    method: Literal["model", "rules"] = "model"
+    # font: ONLY the character font decides (every character the same height and stroke thickness, the
+    #   bold standard HSRP font) - no hologram / "IND" / classifier. Measured much weaker than "model"
+    #   (neat printed non-HSRP plates pass it); for comparison tests.
+    method: Literal["model", "rules", "font"] = "model"
     model_path: Path = Path("models/hsrp/hsrp_cls.onnx")
     # Model output p = chance the plate is HSRP. p >= threshold -> HSRP. Within `margin` of the
     # threshold the frame is "not sure" (not judged) instead of a coin toss.
@@ -259,6 +262,19 @@ class IngestConfig(_Section):
     # missed or never read. Costs only on failures: ~4 extra detector runs + a few OCR reads per image.
     zoom_fallback: bool = True
     zoom_max_candidates: int = Field(4, ge=1, le=16)  # plate boxes tried per image in the second look
+    # Second plate check: a vehicle whose plate came out not HSRP is searched (zoomed tiles, first
+    # second_plate_images images) for another plate with the same number (1 character may differ); if
+    # that plate is HSRP, the vehicle is saved as "hsrp". Trucks often carry an HSRP on the grille and an
+    # old painted copy on the bumper, and the detector may only see the painted one. The other plate
+    # must be near the first and about its size; only a letter may differ (never a digit). Only when
+    # the result is not HSRP: ~1-2 s more per such vehicle on a Pi 3B+ - after the camera's reply with
+    # fast_ack, but inside the reply with respond_with_plate.
+    second_plate_check: bool = True
+    # One vehicle's images are read together and decided once, after the last one; the vehicle is HSRP
+    # when ANY of its images shows the plate as HSRP (e.g. one image of the grille HSRP, one of a
+    # painted copy). Off: the video rule (the first confident read decides; HSRP needs >= 30% of looks).
+    whole_vehicle: bool = True
+    second_plate_images: int = Field(2, ge=1, le=20)
 
 
 class StorageConfig(_Section):

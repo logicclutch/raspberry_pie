@@ -8,6 +8,9 @@
 #                                      Pi; the Pi reads the plate and sends it on. No RTSP/video. Lightest.
 #                                      Dashboard installed but OFF (client turns it on: anpr dashboard on).
 #                                                                           -> dist/anpr_<ver>_ingest_arm64.deb
+#   HSRP_METHOD=font ...               HSRP decided by the character font only (model answers only when the
+#                                      font cannot be measured); also switches an upgraded Pi's config.yaml.
+#                                                                           -> dist/anpr_<ver>_..._font_arm64.deb
 # Needs Docker with arm64 emulation (Docker Desktop / colima with qemu).
 #
 # What the package contains:
@@ -27,6 +30,7 @@ VER_PY=$(sed -nE 's/^version = "([^"]+)"/\1/p' "$SRC/pyproject.toml" | head -1)
 VERSION="${VERSION:-${VER_PY}-1}"
 HEADLESS="${HEADLESS:-0}"
 INGEST="${INGEST:-0}"
+HSRP_METHOD="${HSRP_METHOD:-}"  # empty: the config template's hsrp.method (model)
 # Target OS / Python. Default = Raspberry Pi OS Bookworm (python3.11). For Raspberry Pi OS Trixie set
 # DIST=trixie PYVER=3.13. The venv is built in that exact base so the Pi needs no pip.
 DIST="${DIST:-bookworm}"
@@ -39,7 +43,8 @@ elif [ "$HEADLESS" = "1" ]; then MODE=headless; SUFFIX="_headless"
 else MODE=normal; SUFFIX=""; fi
 # A non-default OS goes in the file name so the two builds never clash (e.g. ..._ingest_trixie_arm64.deb).
 [ "$DIST" = "bookworm" ] && DISTTAG="" || DISTTAG="_${DIST}"
-DEB_NAME="anpr_${VERSION}${SUFFIX}${DISTTAG}_arm64.deb"
+[ -z "$HSRP_METHOD" ] && METHODTAG="" || METHODTAG="_${HSRP_METHOD}"
+DEB_NAME="anpr_${VERSION}${SUFFIX}${DISTTAG}${METHODTAG}_arm64.deb"
 # Debian dependency on the matching interpreter package (its name encodes the minor version).
 PYNEXT="3.$(( ${PYVER#3.} + 1 ))"
 PYDEP="python${PYVER} (>= ${PYVER}.0), python${PYVER} (<< ${PYNEXT})"
@@ -49,7 +54,7 @@ docker info >/dev/null 2>&1 || { echo "Docker is not running. Open Docker Deskto
 echo "== building $DEB_NAME (MODE=$MODE, DIST=$DIST, PYVER=$PYVER) in an arm64 Debian $DIST container"
 docker run --rm --platform linux/arm64 \
   -e VERSION="$VERSION" -e HEADLESS="$HEADLESS" -e MODE="$MODE" -e DEB_NAME="$DEB_NAME" \
-  -e PYVER="$PYVER" -e PYDEP="$PYDEP" \
+  -e PYVER="$PYVER" -e PYDEP="$PYDEP" -e HSRP_METHOD="$HSRP_METHOD" \
   -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
   -v "$SRC":/src:ro -v "$OUT":/out \
   "debian:$DIST" bash -euo pipefail -c '
@@ -90,6 +95,11 @@ sed -e "s#models/detector/plate_det_ncnn_model#lib/models/detector/plate_det_ncn
     -e "s#models/ocr/plate_ocr_config.yaml#lib/models/ocr/plate_ocr_config.yaml#" \
     -e "s#models/hsrp/hsrp_cls.onnx#lib/models/hsrp/hsrp_cls.onnx#" \
     "$CONF" > "$APP/config.default.yaml"
+if [ -n "$HSRP_METHOD" ]; then  # fixed HSRP method: in the default config, and postinst applies it on upgrades
+  sed -i -E "/^hsrp:/,/^[a-z]/ s|^  method: .*|  method: $HSRP_METHOD|" "$APP/config.default.yaml"
+  grep -qE "^  method: $HSRP_METHOD$" "$APP/config.default.yaml"
+  echo "$HSRP_METHOD" > "$APP/HSRP_METHOD"
+fi
 install -m 755 deploy/deb/anpr "$APP/bin/anpr"
 echo "$VERSION" > "$APP/VERSION"
 chmod 755 "$APP/deploy/pi_check.sh"
