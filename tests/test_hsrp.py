@@ -1,5 +1,7 @@
 """HSRP check (anpr.hsrp) on drawn plates, plus the per-track decision rule."""
 
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pytest
@@ -437,3 +439,48 @@ def test_engine_uses_the_model_when_present(tmp_path):
 @needs_model
 def test_model_input_size_is_read_from_the_model_file():
     assert hsrp.HsrpModel(MODEL)._size == (hsrp.MODEL_W, hsrp.MODEL_H)  # the shipped model: 320 x 128
+
+
+def test_font_check_judges_by_the_characters_only():
+    f, box = plate(False)  # one uniform drawn font, no hologram or "IND"
+    look, why, p = hsrp.FontCheck().judge(f, box)
+    assert (look, why) in (("hsrp", ""), ("non_hsrp", "")) and p in (0.0, 1.0)
+    assert hsrp.FontCheck()(f, box) == (look, why)
+    blank = np.full_like(f, 40)  # nothing to measure: not sure, with the reason
+    assert hsrp.FontCheck()(blank, box)[0] is None
+
+
+def test_font_method_is_a_config_choice():
+    from anpr.config import HsrpConfig
+
+    assert HsrpConfig(method="font").method == "font"
+    assert HsrpConfig().method == "model"  # the default stays the classifier
+
+
+def test_font_check_cuts_2_line_plate_whose_lines_touch():
+    # A real 256 x 256 camera picture: tilted and blurred, top-line letters join the ones below
+    # ("U" + "U8", "4" + "83") - cut apart where they meet, the font can be measured.
+    f = cv2.imread(str(Path(__file__).parent / "fixtures" / "hsrp_2line_touching_UP14DU8839.jpg"))
+    box = Box(11, 88, 232, 228, 0.9)
+    gray, _ = hsrp._plate_image(f, box)
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 31, 10)
+    assert hsrp._lines(binary) is None  # as found: no clear lines
+    _, (_, lines) = hsrp._split_lines(binary)
+    assert len(lines) == 2
+    assert hsrp.FontCheck().judge(f, box) == ("hsrp", "", 1.0)
+
+
+def test_font_check_falls_back_to_the_model_only_when_the_font_cannot_be_measured():
+    class Model:
+        calls = 0
+
+        def judge(self, frame, box):
+            Model.calls += 1
+            return "hsrp", "", 0.86
+
+    f, box = plate(False)
+    measured = hsrp.FontCheck().judge(f, box)
+    assert hsrp.FontCheck(Model()).judge(f, box) == measured and Model.calls == 0  # the font decides
+    blank = np.full_like(f, 40)
+    assert hsrp.FontCheck(Model()).judge(blank, box) == ("hsrp", "", 0.86)  # font can't: the model
+    assert hsrp.FontCheck().judge(blank, box)[0] is None  # no model: not sure, as before

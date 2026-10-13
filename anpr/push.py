@@ -526,7 +526,9 @@ class Pusher:
         )
         log.info(
             "API response: %s - HTTP %s - %s - reply: %s",
-            s.url, res.status if res.status is not None else "none (no connection)", res.message,
+            s.url,
+            res.status if res.status is not None else "none (no connection)",
+            res.message,
             res.reply or "(empty)",
         )
         self.last_result = res

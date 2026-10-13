@@ -97,7 +97,13 @@ HSRP 279/281 (99.3%), non-HSRP 242/251 (96.4%), overall 97.9%. On 69 truck plate
 `hsrp.two_line_marks` (on by default) adds a second opinion for 2-line plates: when the model does not say HSRP
 but the hand-written check finds both the hologram and "IND", the plate is HSRP. Trucks: HSRP 6/13, non-HSRP
 still 56/56; no Kaggle non-HSRP plate changes (the font check alone is not used: neat old printed plates pass
-it). `hsrp.method: rules` falls back to the hand-written hologram / "IND" checks. A camera can only tell what a plate *looks like*: a good copy of an HSRP passes.
+it). Camera-push (ingest) mode adds a **second plate check** (`ingest.second_plate_check`, on): trucks often carry an
+HSRP on the grille and an old painted copy on the bumper, and the detector may only see the painted one. When a
+vehicle comes out not HSRP, a zoomed look searches its first images for another plate of the same vehicle (near it,
+about its size, same number - only a letter may differ, never a digit); if that plate is HSRP the vehicle is saved as
+`hsrp`, and a confirmed, clearly surer reading of it replaces the number. On 1,106 labelled photos it changed only
+the two photos of one such truck (both to the right number and `hsrp`), no non-HSRP vehicle.
+`hsrp.method: rules` falls back to the hand-written hologram / "IND" checks. A camera can only tell what a plate *looks like*: a good copy of an HSRP passes.
 
 ## Raspberry Pi 3B+ limits
 

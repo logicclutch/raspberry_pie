@@ -16,6 +16,7 @@ client API (anpr.push) in BOTH modes.
 Run:  python -m anpr.ingest --config config.yaml      (needs `ingest:` and usually `push:` in the config)
 The HTTP server is Python's standard library (no web framework), to stay small on the Pi.
 """
+
 from __future__ import annotations
 
 import base64
@@ -31,7 +32,7 @@ import signal
 import sys
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -99,8 +100,13 @@ def _push_error(message: str, url: str, plate: str | None, queued: bool) -> str:
 
 
 def _push_result_json(
-    out: Any, enabled: bool, message: str = "nothing new to send", *, url: str = "",
-    plates: list[str] | tuple[str, ...] = (), cause: str = "",
+    out: Any,
+    enabled: bool,
+    message: str = "nothing new to send",
+    *,
+    url: str = "",
+    plates: list[str] | tuple[str, ...] = (),
+    cause: str = "",
 ) -> dict:
     """The outcome of pushing THIS vehicle's plate to the client API, for the HTTP response
     (respond_with_plate mode). `out` is an anpr.push.PushOutcome or None (nothing to send). `url` is the
@@ -146,9 +152,18 @@ def _push_failed_json(url: str = "", plates: list[str] | tuple[str, ...] = ()) -
     where = f" to {url} (host {_api_host(url)})" if url else ""
     what = f"plate {plate}" if plate else "the plate"
     err = f"internal error while sending {what}{where}; it is saved on the Pi and will be retried."
-    return {"enabled": True, "url": url, "host": _api_host(url) if url else "", "plate": plate,
-            "ok": False, "queued": True, "status": None, "message": msg, "reply": "",
-            "error": err}
+    return {
+        "enabled": True,
+        "url": url,
+        "host": _api_host(url) if url else "",
+        "plate": plate,
+        "ok": False,
+        "queued": True,
+        "status": None,
+        "message": msg,
+        "reply": "",
+        "error": err,
+    }
 
 
 # ---- finding and decoding the image(s) in the camera's JSON -----------------------------------------
@@ -403,15 +418,28 @@ def process_group(
     engine.reset()
     engine.tracker = _SingleTrack()
     engine.camera = camera or ""
+    whole = bool(getattr(getattr(getattr(engine, "cfg", None), "ingest", None), "whole_vehicle", False))
+    engine.voter.hold = whole  # read every image, decide once at the end (flush)
+    engine.hsrp_any_look = whole
+    engine.second_plate_hsrp = _second_plate_check(engine, images)
+    real = engine.detector
+    ic = getattr(getattr(engine, "cfg", None), "ingest", None)
+    if whole and ic is not None and ic.zoom_fallback:
+        # every image counts (one may be the only clear view of an HSRP): an image where the detector
+        # finds nothing gets a zoomed look of its own
+        engine.detector = _ZoomWhenEmpty(real, ic.zoom_max_candidates)
     events: list[PlateEvent] = []
     ts = time.time()
-    for raw in images:
-        img = decode_image(raw)
-        if img is None:
-            continue
-        events += engine.process(img, ts)
-        ts += dt
-    events += engine.flush()
+    try:
+        for raw in images:
+            img = decode_image(raw)
+            if img is None:
+                continue
+            events += engine.process(img, ts)
+            ts += dt
+        events += engine.flush()
+    finally:
+        engine.detector = real
     dups = list(getattr(engine, "duplicates", []))
     if not events and not dups:
         events, dups = _zoom_retry(engine, images, ts, dt)
@@ -421,7 +449,124 @@ def process_group(
     # ~MB image is not pinned between vehicles.
     engine._last_frame = None
     engine._last_boxes = []
+    engine.second_plate_hsrp = None
+    engine.hsrp_any_look = False
     return events
+
+
+SECOND_PLATE_CANDIDATES = 8  # plate boxes tried per image by the second plate check
+
+
+SAME_NUMBER_MAX_LETTERS = 2  # letters that may differ between two readings of one vehicle's plates
+SMALL_PLATE_PX = 100  # a second plate narrower than this is judged over several shifted boxes
+
+
+def _same_number(a: str, b: str) -> bool:
+    """The same plate read twice (e.g. a worn painted copy and a small HSRP): equal, or up to
+    SAME_NUMBER_MAX_LETTERS letters different (A/R, M/H, Q/A...). A differing digit is never allowed:
+    fleets run consecutive numbers (..1234, ..1235)."""
+    if len(a) != len(b):
+        return False
+    diff = [(x, y) for x, y in zip(a, b, strict=True) if x != y]
+    if any(x.isdigit() and y.isdigit() for x, y in diff):
+        return False
+    return len(diff) <= SAME_NUMBER_MAX_LETTERS
+
+
+def _shifted(box: Box) -> list[Box]:
+    """18 slightly shifted / grown copies of a small plate box: a 50 px plate's reading and look flip
+    with a 1 px change, so they are judged by majority over these."""
+    s = max(1, round(0.04 * (box.x2 - box.x1)))
+    x1, y1, x2, y2 = (round(v) for v in (box.x1, box.y1, box.x2, box.y2))
+    return [
+        Box(x1 + dx - g, y1 + dy - g, x2 + dx + g, y2 + dy + g, box.score)
+        for dx in (-s, 0, s)
+        for dy in (-s, 0, s)
+        for g in (0, s)
+    ]
+
+
+def _judge_other_plate(engine: Any, img: np.ndarray, box: Box) -> tuple[Any, Counter[str], bool]:
+    """(reading or None, every reading with its count, judged HSRP?) for a second plate. A small plate
+    is read and looked at over _shifted() boxes and the majority decides; a bigger one once (read_box)."""
+    if box.x2 - box.x1 >= SMALL_PLATE_PX:
+        valid, votes = engine.read_box(img, box)
+        look = engine.hsrp_look(img, box)
+        counts = Counter({valid.text: votes}) if valid is not None else Counter()
+        return valid, counts, (look[0] if isinstance(look, tuple) else look) == "hsrp"
+    reads: Counter[str] = Counter()
+    best: dict[str, Any] = {}
+    looks: Counter[Any] = Counter()
+    for b in _shifted(box):
+        crop = engine.prepare(img, b, engine.cfg.crop)
+        read = engine.ocr.read(crop) if crop is not None else None
+        valid = engine.validator.validate(read) if read is not None else None
+        if valid is not None:
+            reads[valid.text] += 1
+            best.setdefault(valid.text, valid)
+        look = engine.hsrp_look(img, b)
+        looks[look[0] if isinstance(look, tuple) else look] += 1
+    if not reads:
+        return None, Counter(), False
+    text = reads.most_common(1)[0][0]
+    return best[text], reads, looks["hsrp"] > looks["non_hsrp"]
+
+
+def _other_plate_same_vehicle(box: Box, main: Box) -> bool:
+    """A box that is clearly a different plate (no overlap with the judged one) yet on the same vehicle:
+    about the same size (same distance from the camera) and close by (grille above / bumper below)."""
+    if not (box.x2 <= main.x1 or box.x1 >= main.x2 or box.y2 <= main.y1 or box.y1 >= main.y2):
+        return False  # overlaps: the judged plate again (a shifted box must not overrule its verdict)
+    mw, mh = max(1.0, main.x2 - main.x1), max(1.0, main.y2 - main.y1)
+    if not 0.5 <= (box.x2 - box.x1) / mw <= 2.0:
+        return False
+    dx = abs((box.x1 + box.x2) - (main.x1 + main.x2)) / 2
+    dy = abs((box.y1 + box.y2) - (main.y1 + main.y2)) / 2
+    return dx <= 2.5 * mw and dy <= 5.0 * mh
+
+
+def _second_plate_check(engine: Any, images: list[bytes]) -> Any:
+    """For the engine's second_plate_hsrp hook: (plate) -> (other plate, its agreeing reads) for another
+    plate of the same vehicle, found by a zoomed look at the vehicle's first images, that has the same
+    number and is HSRP; else None. Returns None instead of a hook when switched off."""
+    ic = getattr(getattr(engine, "cfg", None), "ingest", None)
+    if ic is None or not getattr(ic, "second_plate_check", False):
+        return None
+    if getattr(engine, "hsrp_look", None) is None or not hasattr(engine, "read_box"):  # HSRP check off
+        return None
+    detector = engine.detector  # the real one (the zoom retry swaps in fixed boxes for a while)
+    whole = bool(getattr(ic, "whole_vehicle", False)) and ic.zoom_fallback
+
+    def check(plate: str) -> Any:
+        for raw in images[: ic.second_plate_images]:
+            img = decode_image(raw)
+            if img is None:
+                continue
+            boxes = list(detector.detect(img))
+            # The plate the normal pass judged in this image: the detector's, or - whole-vehicle mode -
+            # the zoomed look's best one when the detector found none (as _ZoomWhenEmpty did).
+            main = _best_box(boxes) or (_best_box(_ZoomWhenEmpty(detector, 4).detect(img)) if whole else None)
+            if main is None:
+                continue  # can't tell which plate was judged here: never risk re-judging it
+            ih, iw = img.shape[:2]
+            if (main.x2 - main.x1) * (main.y2 - main.y1) > 0.4 * iw * ih:
+                continue  # the image is a plate crop (the camera's PlateImg): no other plate in it
+            for box in zoom_candidates(detector, img, limit=SECOND_PLATE_CANDIDATES, full=boxes, fine=True):
+                if not _other_plate_same_vehicle(box, main):
+                    continue
+                valid, reads, is_hsrp = _judge_other_plate(engine, img, box)
+                if valid is None or not _same_number(valid.text, plate) or not is_hsrp:
+                    continue
+                log.info(
+                    "second plate %s at %s is HSRP (reads %s)",
+                    valid.text,
+                    (box.x1, box.y1, box.x2, box.y2),
+                    dict(reads),
+                )
+                return valid, reads
+        return None
+
+    return check
 
 
 # ---- second look: zoomed tiles, every candidate box -------------------------------------------------
@@ -435,33 +580,64 @@ def _iou(a: Box, b: Box) -> float:
     return inter / union if union > 0 else 0.0
 
 
+FINER_TILE = 0.3  # 4x4 grid tile size, second plate check only (zoom_candidates fine=True)
 FINE_TILE = 0.45  # 3x3 grid tile size (fraction of the picture), last resort of the zoom retry
 
 
-def zoom_candidates(detector: Any, img: np.ndarray, *, frac: float = 0.6, limit: int = 4) -> list[Box]:
-    """Plate boxes from the whole image plus 2x2 overlapping tiles (each `frac` of the image), mapped
-    back to full-image coordinates, overlaps merged (best score kept), best score first."""
+def _grid(detector: Any, img: np.ndarray, n: int, frac: float) -> list[Box]:
+    """Plate boxes from an n x n grid of overlapping tiles (each `frac` of the image), in image coords."""
     h, w = img.shape[:2]
-    found: list[Box] = list(detector.detect(img))
     th, tw = max(1, int(h * frac)), max(1, int(w * frac))
-    for y in (0, h - th):
-        for x in (0, w - tw):
+    found = []
+    for yi in range(n):
+        for xi in range(n):
+            y, x = round(yi * (h - th) / (n - 1)), round(xi * (w - tw) / (n - 1))
             for b in detector.detect(img[y : y + th, x : x + tw]):
                 found.append(Box(b.x1 + x, b.y1 + y, b.x2 + x, b.y2 + y, b.score))
+    return found
+
+
+def zoom_candidates(
+    detector: Any,
+    img: np.ndarray,
+    *,
+    frac: float = 0.6,
+    limit: int = 4,
+    full: list[Box] | None = None,
+    fine: bool = False,
+) -> list[Box]:
+    """Plate boxes from the whole image plus 2x2 overlapping tiles (each `frac` of the image), mapped
+    back to full-image coordinates, overlaps merged (best score kept), best score first. `full`: the
+    whole-image boxes when already detected (saves one detector run). `fine`: also 3x3 and 4x4 grids
+    of smaller tiles - finds a small plate at the edge of a low-resolution scene (a 50 px HSRP on a
+    truck's grille in a 640x360 picture), at ~25 extra detector runs."""
+    found: list[Box] = list(detector.detect(img) if full is None else full)
+    found += _grid(detector, img, 2, frac)
+    if fine:
+        found += _grid(detector, img, 3, FINE_TILE) + _grid(detector, img, 4, FINER_TILE)
     if not found:
         # Still nothing: a small plate in a big, tall picture (a parked bike in a 12 MP phone photo is
         # ~12 px tall at the detector's size). A finer 3x3 grid of smaller tiles - only paid for here.
-        th, tw = max(1, int(h * FINE_TILE)), max(1, int(w * FINE_TILE))
-        for yi in range(3):
-            for xi in range(3):
-                y, x = round(yi * (h - th) / 2), round(xi * (w - tw) / 2)
-                for b in detector.detect(img[y : y + th, x : x + tw]):
-                    found.append(Box(b.x1 + x, b.y1 + y, b.x2 + x, b.y2 + y, b.score))
+        found += _grid(detector, img, 3, FINE_TILE)
     kept: list[Box] = []
     for b in sorted(found, key=lambda b: -b.score):
         if all(_iou(b, k) < 0.5 for k in kept):
             kept.append(b)
     return kept[:limit]
+
+
+class _ZoomWhenEmpty:
+    """Detector wrapper (whole-vehicle ingest): the real detector's boxes, or - when it finds nothing in
+    an image - the best box of a zoomed look (zoom_candidates) at that image."""
+
+    def __init__(self, real: Any, limit: int) -> None:
+        self.real, self.limit = real, limit
+
+    def detect(self, frame: np.ndarray) -> list[Box]:
+        boxes = list(self.real.detect(frame))
+        if boxes:
+            return boxes
+        return zoom_candidates(self.real, frame, limit=self.limit, full=[])[:1]
 
 
 class _FixedBoxes:
@@ -496,8 +672,11 @@ def _zoom_retry(engine: Any, images: list[bytes], ts: float, dt: float) -> tuple
                 events = engine.process(img, ts) + engine.flush()
                 dups = list(getattr(engine, "duplicates", []))
                 if events or dups:
-                    log.info("zoom retry found %s at %s", [e.plate for e in events + dups],
-                             (box.x1, box.y1, box.x2, box.y2))
+                    log.info(
+                        "zoom retry found %s at %s",
+                        [e.plate for e in events + dups],
+                        (box.x1, box.y1, box.x2, box.y2),
+                    )
                     return events, dups
                 ts += dt
     finally:
@@ -743,15 +922,15 @@ def _make_handler(ctx: _Ctx) -> type[BaseHTTPRequestHandler]:
                 return
             # Accept whatever the camera sends: JSON+base64, multipart/form-data, or a raw JPEG/PNG body.
             try:
-                images, vehicle_id, camera = extract_request(
-                    self.headers.get("Content-Type", ""), body, ic
-                )
+                images, vehicle_id, camera = extract_request(self.headers.get("Content-Type", ""), body, ic)
             except Exception:  # noqa: BLE001 - a malformed body must not kill the handler
                 self._reply(400, {"ok": False, "error": "could not parse the request body"})
                 return
             if not images:
-                self._reply(422, {"ok": False,
-                                  "error": "no image found (send JSON base64, multipart file, or JPEG body)"})
+                self._reply(
+                    422,
+                    {"ok": False, "error": "no image found (send JSON base64, multipart file, or JPEG body)"},
+                )
                 return
 
             ctx.received += 1
@@ -768,8 +947,9 @@ def _make_handler(ctx: _Ctx) -> type[BaseHTTPRequestHandler]:
                 if item is None:  # queue full (or disk error): the camera keeps it and re-sends
                     self._reply(503, {"ok": False, "error": "busy, retry shortly"})
                     return
-                self._reply(200, {"ok": True, "queued": True, "id": item, "images": len(images),
-                                  "vehicle_id": vid})
+                self._reply(
+                    200, {"ok": True, "queued": True, "id": item, "images": len(images), "vehicle_id": vid}
+                )
                 return
             # Synchronous mode: this POST is one whole vehicle. Read+vote inline, push to the client API,
             # and return the plate(s) and the push outcome.
@@ -793,28 +973,41 @@ def _make_handler(ctx: _Ctx) -> type[BaseHTTPRequestHandler]:
                         push_json = _push_failed_json()
                     if not events and dups and push_json.get("enabled"):
                         push_json = _push_result_json(
-                            None, enabled=True, url=push_json.get("url", ""),
-                            plates=[e.plate for e in dups], message=(
+                            None,
+                            enabled=True,
+                            url=push_json.get("url", ""),
+                            plates=[e.plate for e in dups],
+                            message=(
                                 "duplicate: already recorded within the last "
-                                f"{ctx.cfg.vote.dedupe_window_s:.0f} s, not stored or sent again"))
-                reply = {"ok": True, "images": len(images),
-                         "plate": plates[0]["plate"] if plates else None,
-                         "plates": plates,
-                         "push": push_json}
+                                f"{ctx.cfg.vote.dedupe_window_s:.0f} s, not stored or sent again"
+                            ),
+                        )
+                reply = {
+                    "ok": True,
+                    "images": len(images),
+                    "plate": plates[0]["plate"] if plates else None,
+                    "plates": plates,
+                    "push": push_json,
+                }
                 # The plate WAS read and saved (so "ok" stays true and HTTP stays 200: a camera that sees an
                 # error status would re-send the same vehicle). A push that did not deliver is reported
                 # here at the top level too, with the API URL and the plate, so it cannot be missed.
                 if push_json.get("error"):
                     reply["error"] = push_json["error"]
-                log.info("camera request from %s: %d image(s) -> reply: %s", self.client_address[0],
-                         len(images), json.dumps(reply, separators=(",", ":")))
+                log.info(
+                    "camera request from %s: %d image(s) -> reply: %s",
+                    self.client_address[0],
+                    len(images),
+                    json.dumps(reply, separators=(",", ":")),
+                )
                 self._reply(200, reply)
                 return
             # Group by the camera's vehicle id when present, else by the sender (one open group per sender).
             key = f"vid:{vid}" if vid else f"ip:{self.client_address[0]}"
             n = ctx.buffer.add(key, images, cam, vid)
-            self._reply(200, {"ok": True, "received": True, "images": len(images),
-                              "group_size": n, "vehicle_id": vid})
+            self._reply(
+                200, {"ok": True, "received": True, "images": len(images), "group_size": n, "vehicle_id": vid}
+            )
 
     return Handler
 
@@ -1025,10 +1218,18 @@ def run_ingest(
     http = threading.Thread(
         target=srv.serve_forever, kwargs={"poll_interval": 0.5}, name="ingest-http", daemon=True
     )
-    mode = "fast ack, read from the disk queue" if fast else (
-        "read+reply per POST" if sync else "group+vote per vehicle")
-    log.info("ingest server on http://%s:%d%s  (camera POSTs vehicle images here; %s)",
-             cfg.ingest.host, cfg.ingest.port, cfg.ingest.path, mode)
+    mode = (
+        "fast ack, read from the disk queue"
+        if fast
+        else ("read+reply per POST" if sync else "group+vote per vehicle")
+    )
+    log.info(
+        "ingest server on http://%s:%d%s  (camera POSTs vehicle images here; %s)",
+        cfg.ingest.host,
+        cfg.ingest.port,
+        cfg.ingest.path,
+        mode,
+    )
     if not sync and not fast:  # the grouping buffer is unused when each POST is one whole vehicle
         buf.start()
     http.start()
@@ -1147,9 +1348,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         detector = make_detector(cfg.detector)
         ocr = FastPlateOcr(cfg.ocr)
-        return run_ingest(
-            cfg, store, detector, ocr, stop=lambda: stopping or guard.expired(), pusher=pusher
-        )
+        return run_ingest(cfg, store, detector, ocr, stop=lambda: stopping or guard.expired(), pusher=pusher)
     finally:
         if sender_stop is not None:
             sender_stop.set()

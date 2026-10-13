@@ -824,3 +824,204 @@ def test_fast_ack_replies_at_once_and_reads_in_the_background(tmp_path, monkeypa
         stop.set()
         t.join(10)
         store.close()
+
+
+# ---- second plate check: an HSRP on the grille, a painted copy on the bumper ------------------------
+
+
+class _TwoPlateDetector:
+    """Whole 400x400 image: only the painted bumper plate (40,300)-(200,380). Zoomed tiles also show the
+    HSRP plate above it, at (60,120)-(220,200) in whole-image coordinates."""
+
+    def __init__(self, upper=(60, 120, 220, 200)):
+        self.upper = upper
+
+    def detect(self, frame):
+        if frame.shape[0] == 400:
+            return [Box(40, 300, 200, 380, 0.9)]
+        x1, y1, x2, y2 = self.upper
+        return [Box(x1, y1, x2, y2, 0.6)] if frame.shape[0] == 240 and y2 <= 240 else []
+
+
+class _ConfOcr(_BoxOcr):
+    """_BoxOcr with a confidence per text."""
+
+    def __init__(self, texts, confs):
+        super().__init__(texts)
+        self.confs = confs
+
+    def read(self, crop):
+        r = super().read(crop)
+        return OcrResult(r.text, tuple([self.confs.get(r.text, 0.97)] * len(r.text)))
+
+
+def _plates_engine(store, ocr, detector=None, **ingest_kw):
+    cfg = AppConfig(ingest=IngestConfig(enabled=True, **ingest_kw))
+    cfg = cfg.model_copy(update={
+        "hsrp": cfg.hsrp.model_copy(update={"enabled": True, "min_marked": 1, "min_clean": 1}),
+        "vote": cfg.vote.model_copy(update={"min_votes": 1, "end_min_votes": 1, "dedupe_window_s": 0.0}),
+    })
+    # HSRP look stand-in: the upper (grille) plate is HSRP, the bumper plate is not
+    look = lambda frame, box: ("hsrp", "") if box.y1 < 250 else ("non_hsrp", "")  # noqa: E731
+    return Engine(cfg, detector or _TwoPlateDetector(), ocr, store, motion=lambda _f: True, hsrp_look=look)
+
+
+@pytest.fixture
+def _steady_variants(monkeypatch):
+    # the variant reads (trims, padding, contrast) see the same crop: they agree with the first read
+    monkeypatch.setattr("anpr.preprocess.read_variants", lambda crop: [crop] * 5)
+
+
+def test_second_plate_hsrp_marks_the_vehicle_and_a_surer_reading_wins(store, _crop_by_box, _steady_variants):
+    ocr = _ConfOcr({40: "DL1MQ1846", 60: "DL1MA1846"}, {"DL1MQ1846": 0.88, "DL1MA1846": 0.97})
+    evs = ingest.process_group(_plates_engine(store, ocr), [_jpeg_bytes(400, 400)], camera=None)
+    assert [(e.plate, e.hsrp) for e in evs] == [("DL1MA1846", "hsrp")]
+
+
+def test_the_number_comes_from_the_hsrp_plate(store, _crop_by_box, monkeypatch):
+    # the variant reads disagree (junk): an unconfirmed reading of the HSRP plate
+    monkeypatch.setattr("anpr.preprocess.read_variants", lambda crop: [np.zeros_like(crop)] * 5)
+    ocr = _ConfOcr({40: "DL1MQ1846", 60: "DL1MA1846"}, {"DL1MQ1846": 0.88, "DL1MA1846": 0.97})
+    # whole-vehicle mode (default): the number always comes from the plate judged HSRP
+    evs = ingest.process_group(_plates_engine(store, ocr), [_jpeg_bytes(400, 400)], camera=None)
+    assert [(e.plate, e.hsrp) for e in evs] == [("DL1MA1846", "hsrp")]
+    # video-style voting: only a confirmed, surer reading may overrule the vote - here it is not confirmed
+    eng = _plates_engine(store, ocr, whole_vehicle=False)
+    evs = ingest.process_group(eng, [_jpeg_bytes(400, 400)], camera=None)
+    assert [(e.plate, e.hsrp) for e in evs] == [("DL1MQ1846", "hsrp")]
+
+
+def test_second_plate_with_a_different_digit_is_another_vehicle(store, _crop_by_box, _steady_variants):
+    ocr = _ConfOcr({40: "DL1MA1846", 60: "DL1MA1847"}, {})  # a fleet's next truck, not this one
+    evs = ingest.process_group(_plates_engine(store, ocr), [_jpeg_bytes(400, 400)], camera=None)
+    assert [(e.plate, e.hsrp) for e in evs] == [("DL1MA1846", "non_hsrp")]
+
+
+def test_second_plate_check_off(store, _crop_by_box, _steady_variants):
+    ocr = _ConfOcr({40: "DL1MQ1846", 60: "DL1MA1846"}, {"DL1MQ1846": 0.88})
+    eng = _plates_engine(store, ocr, second_plate_check=False)
+    evs = ingest.process_group(eng, [_jpeg_bytes(400, 400)], camera=None)
+    assert [(e.plate, e.hsrp) for e in evs] == [("DL1MQ1846", "non_hsrp")]
+    assert eng.second_plate_hsrp is None
+
+
+def test_second_plate_far_away_or_overlapping_is_not_this_vehicle(store, _crop_by_box, _steady_variants):
+    for upper in ((0, 0, 30, 20), (50, 290, 210, 375)):  # tiny far plate / the bumper plate again (shifted)
+        ocr = _ConfOcr({40: "DL1MA1846", upper[0]: "DL1MA1846"}, {})
+        eng = _plates_engine(store, ocr, detector=_TwoPlateDetector(upper))
+        assert [e.hsrp for e in ingest.process_group(eng, [_jpeg_bytes(400, 400)], None)] == ["non_hsrp"]
+
+
+def test_same_number_allows_two_letters_never_a_digit():
+    assert ingest._same_number("DL1MA1846", "DL1MA1846")
+    assert ingest._same_number("DL1MA1846", "DL1MQ1846")  # worn painted A read as Q
+    assert ingest._same_number("DL1MR1846", "DL1HA1846")  # painted copy vs a 50 px HSRP: 2 letters
+    assert not ingest._same_number("DL1MR1846", "DH1HQ1846")  # 3 letters
+    assert not ingest._same_number("DL1MA1846", "DL1MA1847")  # consecutive fleet numbers
+    assert not ingest._same_number("DL1MA1846", "DL1MQ1847")
+    assert not ingest._same_number("DL1MA1846", "DL1A1846")
+
+
+def test_small_plate_is_judged_over_shifted_boxes():
+    boxes = ingest._shifted(Box(584, 69, 634, 102, 0.7))
+    assert len(boxes) == 18 and all(isinstance(v, int) for b in boxes for v in (b.x1, b.y1, b.x2, b.y2))
+    assert Box(584, 69, 634, 102, 0.7) in boxes
+
+
+def test_vehicle_saved_under_its_hsrp_reading_is_still_a_duplicate_by_its_painted_one(
+    store, _crop_by_box, _steady_variants
+):
+    ocr = _ConfOcr({40: "DL1MQ1846", 60: "DL1MA1846"}, {"DL1MQ1846": 0.88, "DL1MA1846": 0.97})
+    eng = _plates_engine(store, ocr)
+    eng.cfg = eng.cfg.model_copy(update={"vote": eng.cfg.vote.model_copy(update={"dedupe_window_s": 60.0})})
+    eng.collect_duplicates = True
+    assert [e.plate for e in ingest.process_group(eng, [_jpeg_bytes(400, 400)], None)] == ["DL1MA1846"]
+    eng.detector = _TwoPlateDetector(upper=(60, 300, 220, 380))  # next request: only the painted plate seen
+    dups = []
+    assert ingest.process_group(eng, [_jpeg_bytes(400, 400)], None, duplicates=dups) == []
+    assert [d.plate for d in dups] == ["DL1MQ1846"]
+
+
+# ---- whole vehicle: every image read, decided once; HSRP when one image is sure of it ---------------
+
+
+class _SeqDetector:
+    """One box per image, in order: image 1 sees the painted plate, image 2 the HSRP plate."""
+
+    def __init__(self, boxes):
+        self.boxes, self.i = list(boxes), 0
+
+    def detect(self, frame):
+        if frame.shape[0] != 400:  # zoom tiles: nothing extra
+            return []
+        b = self.boxes[min(self.i, len(self.boxes) - 1)]
+        self.i += 1
+        return [b]
+
+
+class _PJudge:
+    """HSRP stand-in with the classifier's judge(): (look, why, p) by box.x1."""
+
+    def __init__(self, by_x1):
+        self.by_x1 = by_x1
+
+    def __call__(self, frame, box):
+        return self.judge(frame, box)[:2]
+
+    def judge(self, frame, box):
+        look, p = self.by_x1[int(box.x1)]
+        return look, "", p
+
+
+def _vehicle_engine(store, ocr, boxes, judge, **ingest_kw):
+    cfg = AppConfig(ingest=IngestConfig(enabled=True, second_plate_check=False, **ingest_kw))
+    cfg = cfg.model_copy(update={
+        "hsrp": cfg.hsrp.model_copy(update={"enabled": True, "min_marked": 1, "min_clean": 1}),
+        "vote": cfg.vote.model_copy(update={"min_votes": 1, "end_min_votes": 1, "dedupe_window_s": 0.0,
+                                             "close_ratio": 0.0, "settle_s": 0.0}),  # as _build_engine
+    })
+    return Engine(cfg, _SeqDetector(boxes), ocr, store, motion=lambda _f: True, hsrp_look=judge)
+
+
+_PAINTED, _HSRP = Box(40, 300, 200, 380, 0.9), Box(60, 120, 220, 200, 0.9)
+
+
+def test_one_sure_hsrp_image_makes_the_vehicle_hsrp_and_its_reading_wins(store, _crop_by_box):
+    ocr = _ConfOcr({40: "DL1MR1846", 60: "DL1MA1846"}, {"DL1MR1846": 0.88, "DL1MA1846": 0.99})
+    for order in ([_PAINTED, _HSRP], [_HSRP, _PAINTED]):
+        eng = _vehicle_engine(store, ocr, order, _PJudge({40: ("non_hsrp", 0.02), 60: ("hsrp", 0.99)}))
+        evs = ingest.process_group(eng, [_jpeg_bytes(400, 400)] * 2, None)
+        assert [(e.plate, e.hsrp) for e in evs] == [("DL1MA1846", "hsrp")]
+
+
+def test_a_weak_hsrp_image_against_another_image_is_not_sure(store, _crop_by_box):
+    ocr = _ConfOcr({40: "DL1MA1846", 60: "DL1MA1846"}, {})
+    judge = _PJudge({40: ("non_hsrp", 0.05), 60: ("hsrp", 0.7)})
+    eng = _vehicle_engine(store, ocr, [_PAINTED, _HSRP], judge)
+    evs = ingest.process_group(eng, [_jpeg_bytes(400, 400)] * 2, None)
+    assert [e.hsrp for e in evs] == ["not sure: images disagree"]
+
+
+def test_whole_vehicle_off_keeps_the_first_confident_read(store, _crop_by_box):
+    ocr = _ConfOcr({40: "DL1MR1846", 60: "DL1MA1846"}, {"DL1MR1846": 0.88, "DL1MA1846": 0.99})
+    judge = _PJudge({40: ("non_hsrp", 0.02), 60: ("hsrp", 0.99)})
+    eng = _vehicle_engine(store, ocr, [_PAINTED, _HSRP], judge, whole_vehicle=False)
+    evs = ingest.process_group(eng, [_jpeg_bytes(400, 400)] * 2, None)
+    assert [(e.plate, e.hsrp) for e in evs] == [("DL1MR1846", "non_hsrp")]
+
+
+def test_images_of_two_different_numbers_give_no_plate_rather_than_a_guess(store, _crop_by_box):
+    ocr = _ConfOcr({40: "DL1MA1846", 60: "HR26TC5656"}, {})
+    judge = _PJudge({40: ("non_hsrp", 0.05), 60: ("hsrp", 0.99)})
+    eng = _vehicle_engine(store, ocr, [_PAINTED, _HSRP], judge, zoom_fallback=False)
+    assert ingest.process_group(eng, [_jpeg_bytes(400, 400)] * 2, None) == []
+
+
+
+def test_a_sure_hsrp_image_gives_the_number_even_when_less_confident(store, _crop_by_box):
+    # the painted plate reads more confidently (0.99) than the HSRP plate (0.90): the HSRP plate's number wins
+    ocr = _ConfOcr({40: "DL1MR1846", 60: "DL1MA1846"}, {"DL1MR1846": 0.99, "DL1MA1846": 0.90})
+    judge = _PJudge({40: ("non_hsrp", 0.02), 60: ("hsrp", 0.99)})
+    eng = _vehicle_engine(store, ocr, [_PAINTED, _HSRP], judge)
+    evs = ingest.process_group(eng, [_jpeg_bytes(400, 400)] * 2, None)
+    assert [(e.plate, e.hsrp) for e in evs] == [("DL1MA1846", "hsrp")]

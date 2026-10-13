@@ -16,7 +16,7 @@ import threading
 import time
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import cv2
@@ -68,6 +68,8 @@ PURGE_EVERY_S = 6 * 3600.0
 # fixed, none broken.
 LOW_CHAR_CONF = 0.7
 MAJORITY_MIN_VOTES = 3  # of the first read + 5 variant reads
+SECOND_PLATE_READ_CONF = 0.95  # a voted reading less sure than this also gets the second plate check
+SECOND_PLATE_CONF_MARGIN = 0.05  # a second (HSRP) plate's reading replaces the voted one only this much surer
 HSRP_MAX_LOOKS = 12  # HSRP check: looks kept per vehicle (~4 ms each on a Mac); enough to decide
 # The trained classifier (hsrp.method: model) is far surer per look but ~10x dearer (~200 ms on a Pi 3B+):
 # a few of the closest views are enough, and one confident look decides.
@@ -86,6 +88,8 @@ def _shared_hsrp_model(path: str, threshold: float, margin: float, two_line_mark
         if key not in _HSRP_MODELS:
             _HSRP_MODELS[key] = HsrpModel(path, threshold, margin, two_line_marks=two_line_marks)
         return _HSRP_MODELS[key]
+
+
 EXIT_MEMORY = 3  # systemd restarts us
 EXIT_LICENCE = 4  # no valid licence for this device (or it ended while running)
 PREVIEW_TRACKED = (32, 176, 255)  # BGR amber (--signal): plate being read
@@ -175,6 +179,11 @@ class Engine:
         # last reset). Ingest reports these back so a re-sent vehicle doesn't look like a failed read.
         # Off by default (the video loop never resets, so the list would only grow); ingest switches it on.
         self.collect_duplicates = False
+        # Ingest: (plate) -> another plate of the same vehicle with (about) that number that is HSRP, or
+        # None. Asked only for a plate whose own looks did not say HSRP, before it is saved (anpr.ingest).
+        self.second_plate_hsrp: Callable[[str], tuple[ValidPlate, Counter[str]] | None] | None = None
+        # Ingest (one POST = one vehicle, a few deliberate images): one image showing an HSRP is enough.
+        self.hsrp_any_look = False
         self.duplicates: list[PlateEvent] = []
         # For the dashboard live preview: the last frame seen, the tracked boxes on it and the plate
         # each confirmed track was read as. Only references are kept; nothing is copied per frame.
@@ -185,6 +194,17 @@ class Engine:
         self._heads: dict[int, dict[str, list]] = {}
         # HSRP check: per track, (plate width, look "hsrp" / "non_hsrp" / None, why not judged) per
         # read. `hsrp_look` returns a look, or (look, why) like anpr.hsrp.judge.
+        if hsrp_look is None and cfg.hsrp.enabled and cfg.hsrp.method == "font":
+            from pathlib import Path
+
+            from anpr.hsrp import FontCheck
+
+            c = cfg.hsrp
+            fallback = None
+            if Path(c.model_path).is_file():  # answers when the font cannot be measured
+                fallback = _shared_hsrp_model(c.model_path, c.threshold, c.margin, c.two_line_marks)
+            hsrp_look = FontCheck(fallback)
+            log.info("hsrp: font check (hsrp.method: font), model fallback: %s", fallback is not None)
         if hsrp_look is None and cfg.hsrp.enabled and cfg.hsrp.method == "model":
             from pathlib import Path
 
@@ -209,7 +229,8 @@ class Engine:
 
         self._hsrp_is_model = isinstance(hsrp_look, HsrpModel)
         self._hsrp_max_looks = HSRP_MODEL_MAX_LOOKS if self._hsrp_is_model else HSRP_MAX_LOOKS
-        self._hsrp: dict[int, list[tuple[int, str | None, str]]] = {}
+        # per track: (plate width, look, why not judged, classifier p or None, the read of that view)
+        self._hsrp: dict[int, list[tuple[int, str | None, str, float | None, ValidPlate | None]]] = {}
 
     def reset(self) -> None:
         """New stream: forget tracks, pending votes and the motion reference (a different scene).
@@ -321,6 +342,29 @@ class Engine:
         log.debug("majority read track=%d %r -> %r (%d votes)", tid, first.text, text, n)
         return best[text]
 
+    def read_box(self, frame: np.ndarray, box: Box) -> tuple[ValidPlate | None, int]:
+        """One extra box read with the main pass's chain (2-line top-line join, unsure-character
+        majority) without touching any track. Returns (plate or None, how many of the first read + its
+        variant reads agree on it: 1 = a single read, >= MAJORITY_MIN_VOTES = confirmed)."""
+        tid = -1  # scratch track: _heads[-1] is dropped below
+        crop = self.prepare(frame, box, self.cfg.crop)
+        result = self.ocr.read(crop) if crop is not None else None
+        if result is None:
+            return None, 0
+        try:
+            valid = self.validator.validate(result)
+            if valid is None:
+                return self._top_line_read(frame, box, tid, result)[0], 1
+            reads, best = self._variant_votes(crop)
+            best.setdefault(valid.text, valid)
+            reads[valid.text] += 1
+            (text, n), *rest = reads.most_common(2)
+            if text != valid.text and n >= MAJORITY_MIN_VOTES and not (rest and rest[0][1] == n):
+                valid = best[text]  # a clear majority of the variant reads beats the first read
+            return valid, reads[valid.text]
+        finally:
+            self._heads.pop(tid, None)
+
     def _top_line_read(
         self, frame: np.ndarray, box: Box, tid: int, bottom: OcrResult
     ) -> tuple[ValidPlate | None, np.ndarray | None]:
@@ -429,7 +473,51 @@ class Engine:
     ) -> PlateEvent | None:
         """Store a confirmed plate (unless it is a duplicate within the dedupe window)."""
         self._confirmed[tid] = decision.plate  # green in the live preview, saved or duplicate
-        if self._is_duplicate(decision.plate, ts):
+        voted = decision.plate  # the voter's evidence (crop, snapshot) is filed under this text
+        hsrp = self._hsrp_result(tid)
+        if hsrp == "hsrp" and self.hsrp_any_look:
+            # One vehicle, several plates/images: the number comes from the plate judged HSRP (embossed,
+            # standard font), not from a worn painted copy that may have won the vote.
+            hsrp_read = self._hsrp_plate_read(tid)
+            if hsrp_read is not None and hsrp_read.text != voted:
+                log.info("hsrp: number from the HSRP plate %s (vote said %s)", hsrp_read.text, voted)
+                decision = replace(decision, plate=hsrp_read.text, kind=hsrp_read.kind)
+                self._confirmed[tid] = decision.plate
+        # A second plate of the vehicle is looked for when this one is not HSRP, or when its number is
+        # unsure (a worn painted copy): an HSRP plate elsewhere on the vehicle decides both.
+        unsure_number = decision.confidence < SECOND_PLATE_READ_CONF
+        if hsrp is not None and (hsrp != "hsrp" or unsure_number) and self.second_plate_hsrp is not None:
+            second = None
+            try:
+                second = self.second_plate_hsrp(voted)
+            except Exception:  # noqa: BLE001 - a failed extra look must never lose the plate
+                log.warning("hsrp: second plate check failed for %s", voted, exc_info=True)
+            if second is not None:
+                plate2, reads2 = second
+                votes2 = reads2.get(plate2.text, 0)
+                log.info("hsrp: %s has a second plate %s that is HSRP (was %r)", voted, plate2.text, hsrp)
+                hsrp = "hsrp"
+                merged = self._two_plate_consensus(reads2, self.voter.texts(tid) or [voted])
+                if merged is not None and merged.text != plate2.text:
+                    log.info(
+                        "hsrp: number %s -> %s (both plates agree on these characters)",
+                        plate2.text,
+                        merged.text,
+                    )
+                    plate2, votes2 = merged, MAJORITY_MIN_VOTES
+                # The number comes from the HSRP plate (embossed, standard font) - in whole-vehicle mode
+                # always; otherwise only a confirmed, clearly surer reading of it overrules the vote.
+                if plate2.text != voted and (
+                    self.hsrp_any_look
+                    or (
+                        votes2 >= MAJORITY_MIN_VOTES
+                        and plate2.confidence >= decision.confidence + SECOND_PLATE_CONF_MARGIN
+                    )
+                ):
+                    decision = replace(decision, plate=plate2.text, kind=plate2.kind)
+                    self._confirmed[tid] = decision.plate
+        other_seen = voted != decision.plate and self._is_duplicate(voted, ts)
+        if self._is_duplicate(decision.plate, ts) or other_seen:
             self.stats.duplicates += 1
             log.info("duplicate %s within %.0fs, not saved", decision.plate, self.cfg.vote.dedupe_window_s)
             if self.collect_duplicates:
@@ -442,12 +530,12 @@ class Engine:
                         track_id=tid,
                         first_seen=first_seen,
                         last_seen=last_seen,
-                        hsrp=self._hsrp_result(tid),
+                        hsrp=hsrp,
                         camera=self.camera or None,
                     )
                 )
             return None
-        best_crop, best_snap = self.voter.evidence(tid, decision.plate)
+        best_crop, best_snap = self.voter.evidence(tid, voted)
         event = self.store.add_event(
             PlateEvent(
                 plate=decision.plate,
@@ -457,13 +545,14 @@ class Engine:
                 track_id=tid,
                 first_seen=first_seen,
                 last_seen=last_seen,
-                hsrp=self._hsrp_result(tid),
+                hsrp=hsrp,
                 camera=self.camera or None,
             ),
             crop=best_crop,
             snapshot=best_snap,
         )
         self._last_emitted[decision.plate] = ts
+        self._last_emitted[voted] = ts  # the same vehicle again, read from its other plate: still a duplicate
         self.stats.events += 1
         log.info(
             "PLATE %s conf=%.3f votes=%d agree=%.2f track=%d hsrp=%s (%s)",
@@ -477,7 +566,7 @@ class Engine:
         )
         return event
 
-    def _hsrp_observe(self, tid: int, frame: np.ndarray, box: Box) -> None:
+    def _hsrp_observe(self, tid: int, frame: np.ndarray, box: Box, read: ValidPlate | None = None) -> None:
         """Judge this frame for the HSRP check. Keeps the looks from the HSRP_MAX_LOOKS biggest
         (closest) views of the plate: far-away frames are the blurriest, and this bounds the cost."""
         if self.hsrp_look is None:
@@ -490,15 +579,48 @@ class Engine:
             del looks[smallest]
         from anpr.hsrp import WHY_FAILED
 
-        why = ""
+        why, p = "", None
         try:
-            look = self.hsrp_look(frame, box)
-            if isinstance(look, tuple):
-                look, why = look
+            judge = getattr(self.hsrp_look, "judge", None)
+            if judge is not None:  # the classifier: keep its p too (how sure this image is)
+                look, why, p = judge(frame, box)
+            else:
+                look = self.hsrp_look(frame, box)
+                if isinstance(look, tuple):
+                    look, why = look
         except Exception:  # noqa: BLE001 - an extra check must never cost the plate read
             log.debug("hsrp check failed track=%d", tid, exc_info=True)
             look, why = None, WHY_FAILED
-        looks.append((box.width, look, why))
+        looks.append((box.width, look, why, p, read))
+
+    def _two_plate_consensus(self, hsrp_reads: Counter[str], other_texts: list[str]) -> ValidPlate | None:
+        """One vehicle, two plates both too small or worn to read alone (a 50 px HSRP read DL1HA1846 /
+        DL1MA1846, a painted copy read DL1MR1846): per character, a character that BOTH plates' readings
+        show wins; elsewhere the HSRP plate's majority stays. None when the result is not a valid plate."""
+        if not hsrp_reads:
+            return None
+        base = hsrp_reads.most_common(1)[0][0]
+        chars = list(base)
+        others = [t for t in other_texts if len(t) == len(base)]
+        for i in range(len(base)):
+            here: Counter[str] = Counter()
+            for t, n in hsrp_reads.items():
+                if len(t) == len(base):
+                    here[t[i]] += n
+            both = [c for c, _ in here.most_common() if any(o[i] == c for o in others)]
+            if both and base[i] not in both:
+                chars[i] = both[0]
+        text = "".join(chars)
+        return self.validator.validate(OcrResult(text, (0.9,) * len(text)))
+
+    def _hsrp_plate_read(self, tid: int) -> ValidPlate | None:
+        """The read of the view judged most surely HSRP (classifier p, then read confidence), or None."""
+        hsrp_views = [
+            (p or 0.0, rd.confidence, rd)
+            for _, lk, _, p, rd in self._hsrp.get(tid, [])
+            if lk == "hsrp" and rd is not None
+        ]
+        return max(hsrp_views, key=lambda v: (v[0], v[1]))[2] if hsrp_views else None
 
     def _hsrp_result(self, tid: int) -> str | None:
         """HSRP / non-HSRP from the track's looks so far, or for a plate that could not be judged
@@ -509,13 +631,24 @@ class Engine:
 
         c = self.cfg.hsrp
         seen = self._hsrp.get(tid, [])
-        looks = [look for _, look, _ in seen]
+        looks = [look for _, look, _, _, _ in seen]
+        if self.hsrp_any_look and "hsrp" in looks:
+            # One vehicle, several images: HSRP when every image says so, or when one image is SURE of
+            # it (an HSRP on the grille + a painted copy on the bumper). A weak HSRP image against
+            # other images is "not sure" - on 2-image test vehicles a weak view made 2 false HSRP.
+            from anpr.hsrp import STRONG_P, WHY_VIEWS_DISAGREE
+
+            if all(lk == "hsrp" for lk in looks) or any(
+                lk == "hsrp" and p is not None and p >= STRONG_P for _, lk, _, p, _ in seen
+            ):
+                return "hsrp"
+            return label("unsure", WHY_VIEWS_DISAGREE, c.unsure_as_hsrp, c.unsure_as_non_hsrp)
         # The classifier: one confident look decides (several looks still must agree, see decide()).
         mm, mc = (1, 1) if self._hsrp_is_model else (c.min_marked, c.min_clean)
         result = decide(looks, min_marked=mm, min_clean=mc)
         if result != "unsure":
             return result
-        reason = why_unsure(looks, [why for _, _, why in seen], mm, mc)
+        reason = why_unsure(looks, [why for _, _, why, _, _ in seen], mm, mc)
         return label(result, reason, c.unsure_as_hsrp, c.unsure_as_non_hsrp)
 
     def _end_track(self, tr: Track, ts: float) -> PlateEvent | None:
@@ -590,7 +723,7 @@ class Engine:
                 log.debug("rejected read track=%d text=%r", tid, result.text)
                 continue
             self.stats.valid_reads += 1
-            self._hsrp_observe(tid, frame, box)
+            self._hsrp_observe(tid, frame, box, valid)
             if snapshot is None:
                 snapshot = self._snapshot(frame)
             decision = self.voter.add(tid, valid, crop, snapshot, width=box.width)

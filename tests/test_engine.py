@@ -868,7 +868,7 @@ def test_hsrp_check_stops_after_enough_looks(tmp_path):
         # first 12 frames judged; later ones (not bigger than the smallest kept) are skipped, but
         # the 4 far-away frames were each replaced by a bigger one before that
         kept = eng._hsrp[next(iter(eng._hsrp))]
-        assert len(kept) == HSRP_MAX_LOOKS and min(w for w, _, _ in kept) == 200
+        assert len(kept) == HSRP_MAX_LOOKS and min(w for w, *_ in kept) == 200
         assert len(seen) == HSRP_MAX_LOOKS + 4
         assert eng._hsrp_result(next(iter(eng._hsrp))) == "hsrp"
     finally:
@@ -937,3 +937,15 @@ def test_majority_read_replaces_an_unsure_valid_read_only_on_a_clear_majority(cf
     assert eng._majority_read(1, first, crop).text == "DL1GC8473"
     eng.ocr = Seq(["DL1GC8473", "DL1GC8473", "DL16C8473", "", ""])  # 2 vs 2: no clear majority
     assert eng._majority_read(1, first, crop).text == "DL16C8473"
+
+
+def test_two_plate_consensus_takes_the_characters_both_plates_show(cfg, store):
+    """A 50 px HSRP read DL1HA1846 x13 / DL1MA1846 x3 and a worn painted copy read DL1MR1846: the M is on
+    both plates, the A only readable on the HSRP -> DL1MA1846."""
+    from collections import Counter
+
+    eng = make(cfg, store, FakeDetector([]), FakeOcr([]))
+    hsrp_reads = Counter({"DL1HA1846": 13, "DL1MA1846": 3})
+    assert eng._two_plate_consensus(hsrp_reads, ["DL1MR1846"]).text == "DL1MA1846"
+    assert eng._two_plate_consensus(hsrp_reads, ["HR26TC5656"]).text == "DL1HA1846"  # nothing in common
+    assert eng._two_plate_consensus(Counter(), ["DL1MR1846"]) is None

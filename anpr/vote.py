@@ -90,6 +90,9 @@ class PlateVoter:
     def __init__(self, cfg: VoteConfig) -> None:
         self._cfg = cfg
         self._tracks: dict[int, _TrackVotes] = {}
+        # Camera push (ingest): one POST is the whole vehicle, so collect every image's read and decide
+        # only in finish() - never on the first good read (a later image may show the plate better).
+        self.hold = False
 
     def is_reported(self, track_id: int) -> bool:
         tv = self._tracks.get(track_id)
@@ -148,7 +151,7 @@ class PlateVoter:
         key = ((width or 0.0), read.confidence)
         if ev is None or key > ev.key:
             tv.best[read.text] = _Evidence(read.confidence, crop, snapshot, key)
-        if tv.reported or not self._settled(tv):
+        if tv.reported or self.hold or not self._settled(tv):
             return None
         d = decide(self._close_reads(tv), self._cfg)
         if d is not None:
@@ -169,10 +172,26 @@ class PlateVoter:
             return None
         close = self._close_reads(tv)
         d = decide(close, self._cfg) or self._end_rule(tv, close)
+        if d is None and self.hold:
+            d = self._surest_read(tv.reads)
         if d is None:
             return None
         tv.reported = True
         return d
+
+    def _surest_read(self, reads: list[ValidPlate]) -> Decision | None:
+        """hold (one vehicle's images, read together): the images disagree, e.g. a worn painted plate in
+        one and the clean HSRP in another, one character apart. Take the most confident read - if it
+        clears min_avg_conf and every other read is within one character of it (the same vehicle)."""
+        if not reads:
+            return None
+        best = max(reads, key=lambda r: r.confidence)
+        if best.confidence < self._cfg.min_avg_conf:
+            return None
+        if any(r.text != best.text and not _one_char_apart(r.text, best.text) for r in reads):
+            return None
+        votes = sum(r.text == best.text for r in reads)
+        return Decision(best.text, best.kind, votes, best.confidence, votes / len(reads))
 
     def _end_rule(self, tv: _TrackVotes, close: list[ValidPlate]) -> Decision | None:
         """Stricter rules for a vehicle that gave too few reads for the normal rule (`end_min_votes`
@@ -214,6 +233,11 @@ class PlateVoter:
                     plate=reads[0].text, kind=reads[0].kind, votes=len(reads), confidence=conf, agreement=1.0
                 )
         return None
+
+    def texts(self, track_id: int) -> list[str]:
+        """Every valid plate text read on the track so far."""
+        tv = self._tracks.get(track_id)
+        return [r.text for r in tv.reads] if tv else []
 
     def drop(self, track_id: int) -> list[ValidPlate]:
         """Forget a finished track. Returns its reads (for logging unreported vehicles)."""
