@@ -263,10 +263,10 @@ class IngestConfig(_Section):
     zoom_fallback: bool = True
     zoom_max_candidates: int = Field(4, ge=1, le=16)  # plate boxes tried per image in the second look
     # Second plate check: a vehicle whose plate came out not HSRP is searched (zoomed tiles, first
-    # second_plate_images images) for another plate with the same number (1 character may differ); if
+    # second_plate_images images) for another plate with the same number (up to 2 letters may differ); if
     # that plate is HSRP, the vehicle is saved as "hsrp". Trucks often carry an HSRP on the grille and an
     # old painted copy on the bumper, and the detector may only see the painted one. The other plate
-    # must be near the first and about its size; only a letter may differ (never a digit). Only when
+    # must be near the first and about its size; only letters may differ, at most 2 (never a digit). Only when
     # the result is not HSRP: ~1-2 s more per such vehicle on a Pi 3B+ - after the camera's reply with
     # fast_ack, but inside the reply with respond_with_plate.
     second_plate_check: bool = True
