@@ -484,3 +484,28 @@ def test_font_check_falls_back_to_the_model_only_when_the_font_cannot_be_measure
     blank = np.full_like(f, 40)
     assert hsrp.FontCheck(Model()).judge(blank, box) == ("hsrp", "", 0.86)  # font can't: the model
     assert hsrp.FontCheck().judge(blank, box)[0] is None  # no model: not sure, as before
+
+
+def test_a_font_hsrp_image_does_not_outvote_another_image(tmp_path):
+    # The font check is weak (a neatly printed non-HSRP plate passes it), so in whole-vehicle ingest
+    # one font pass must not count as a SURE HSRP image that overrules the other images of the vehicle.
+    from anpr.config import AppConfig, HsrpConfig, StorageConfig
+    from anpr.engine import Engine
+
+    img = cv2.imread(str(Path(__file__).parent / "fixtures" / "hsrp_2line_non_hsrp_TN37CC3205.jpg"))
+    h, w = img.shape[:2]
+    box = Box(8, 8, w - 8, h - 8, 0.9)
+
+    class SureNotModel:  # the fallback, sure the plate is NOT an HSRP
+        def judge(self, frame, box):
+            return "non_hsrp", "", 0.02
+
+    font = hsrp.FontCheck(SureNotModel())
+    assert font.judge(img, box) == ("hsrp", "", None)  # a non-HSRP plate passes the font: no confidence
+    cfg = AppConfig(storage=StorageConfig(db_path=tmp_path / "a.db", image_dir=tmp_path / "i"),
+                    hsrp=HsrpConfig(method="font", model_path=tmp_path / "missing.onnx"))
+    eng = Engine(cfg, detector=None, ocr=None, store=None, hsrp_look=font)
+    eng.hsrp_any_look = True  # whole-vehicle ingest
+    eng._hsrp_observe(1, img, box)  # neat non-HSRP plate: the font passes
+    eng._hsrp_observe(1, np.full_like(img, 40), box)  # font cannot measure: the model says not HSRP
+    assert eng._hsrp_result(1) == "not sure: images disagree"
