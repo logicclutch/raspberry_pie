@@ -614,13 +614,16 @@ class Engine:
         return self.validator.validate(OcrResult(text, (0.9,) * len(text)))
 
     def _hsrp_plate_read(self, tid: int) -> ValidPlate | None:
-        """The read of the view judged most surely HSRP (classifier p, then read confidence), or None."""
+        """The read of the view judged most surely HSRP, or None. Font mode: a view the font check
+        measured (p None) comes first - its letters were clear enough to measure, while the model
+        fallback only answers for a small, blurred or low-contrast view. Then classifier p, then
+        read confidence. (In model mode every view has p; in rule mode none has.)"""
         hsrp_views = [
-            (p or 0.0, rd.confidence, rd)
+            (p is None, p or 0.0, rd.confidence, rd)
             for _, lk, _, p, rd in self._hsrp.get(tid, [])
             if lk == "hsrp" and rd is not None
         ]
-        return max(hsrp_views, key=lambda v: (v[0], v[1]))[2] if hsrp_views else None
+        return max(hsrp_views, key=lambda v: v[:3])[3] if hsrp_views else None
 
     def _hsrp_result(self, tid: int) -> str | None:
         """HSRP / non-HSRP from the track's looks so far, or for a plate that could not be judged

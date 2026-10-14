@@ -637,7 +637,8 @@ class FontCheck:
     measured. Callable like `judge`; judge() adds p = None: the font check is weak (a neatly
     printed non-HSRP plate passes it too), so a font answer is never a sure image (p >= STRONG_P).
     In whole-vehicle ingest a font "hsrp" makes the vehicle HSRP only when every image says HSRP,
-    or when the model fallback is sure of it on some image (anpr.engine).
+    or when the model fallback is sure of it on some image (anpr.engine). The plate number is
+    still taken from an image the font measured before one where the model fallback answered.
     `fallback` (an HsrpModel): its answer when the font cannot be measured (letters not found,
     picture too small or blurred), instead of "not sure"."""
 
