@@ -390,8 +390,14 @@ class _FakeModel(hsrp.HsrpModel):
 
 @pytest.mark.parametrize(
     ("p", "want"),
-    [(0.97, ("hsrp", "")), (0.61, ("hsrp", "")), (0.55, (None, hsrp.WHY_LOW_CONF)),
-     (0.45, (None, hsrp.WHY_LOW_CONF)), (0.2, ("non_hsrp", "")), (None, (None, hsrp.WHY_NO_PLATE))],
+    [
+        (0.97, ("hsrp", "")),
+        (0.61, ("hsrp", "")),
+        (0.55, (None, hsrp.WHY_LOW_CONF)),
+        (0.45, (None, hsrp.WHY_LOW_CONF)),
+        (0.2, ("non_hsrp", "")),
+        (None, (None, hsrp.WHY_NO_PLATE)),
+    ],
 )
 def test_model_verdict_and_not_sure_band(p, want):
     f, box = plate(True)
@@ -429,8 +435,10 @@ def test_engine_uses_the_model_when_present(tmp_path):
     from anpr.config import AppConfig, HsrpConfig, StorageConfig
     from anpr.engine import Engine
 
-    cfg = AppConfig(storage=StorageConfig(db_path=tmp_path / "a.db", image_dir=tmp_path / "i"),
-                    hsrp=HsrpConfig(model_path=MODEL))
+    cfg = AppConfig(
+        storage=StorageConfig(db_path=tmp_path / "a.db", image_dir=tmp_path / "i"),
+        hsrp=HsrpConfig(model_path=MODEL),
+    )
     eng = Engine(cfg, detector=None, ocr=None, store=None)
     assert isinstance(eng.hsrp_look, hsrp.HsrpModel)
     cfg = cfg.model_copy(update={"hsrp": HsrpConfig(model_path=tmp_path / "missing.onnx")})
@@ -532,3 +540,36 @@ def test_a_font_hsrp_image_does_not_outvote_another_image(tmp_path):
     eng._hsrp_observe(1, img, box)  # neat non-HSRP plate: the font passes
     eng._hsrp_observe(1, np.full_like(img, 40), box)  # font cannot measure: the model says not HSRP
     assert eng._hsrp_result(1) == "not sure: images disagree"
+
+
+def test_the_number_comes_from_the_font_measured_image_not_the_model_fallback(tmp_path):
+    # Font mode, whole-vehicle ingest: the clear image (the font measured it as HSRP) reads DL1CA1234,
+    # the small image the font could not measure (the model said HSRP p=0.92) reads DL1CR1234 less
+    # surely. The number must come from the clear image, as it did when a font answer had p=1.0.
+    from anpr.config import AppConfig, HsrpConfig, StorageConfig
+    from anpr.engine import Engine
+    from anpr.types import ValidPlate
+
+    img = cv2.imread(str(Path(__file__).parent / "fixtures" / "hsrp_2line_non_hsrp_TN37CC3205.jpg"))
+    h, w = img.shape[:2]
+    box = Box(8, 8, w - 8, h - 8, 0.9)
+
+    class SureModel:  # the fallback, sure the plate is an HSRP
+        def judge(self, frame, box):
+            return "hsrp", "", 0.92
+
+    font = hsrp.FontCheck(SureModel())
+    assert font.judge(img, box) == ("hsrp", "", None)  # measured by the font
+    blank = np.full_like(img, 40)
+    assert font.judge(blank, box) == ("hsrp", "", 0.92)  # not measured: the model answered
+    cfg = AppConfig(
+        storage=StorageConfig(db_path=tmp_path / "a.db", image_dir=tmp_path / "i"),
+        hsrp=HsrpConfig(method="font", model_path=tmp_path / "missing.onnx"),
+    )
+    eng = Engine(cfg, detector=None, ocr=None, store=None, hsrp_look=font)
+    eng.hsrp_any_look = True  # whole-vehicle ingest
+    clear = ValidPlate("DL1CA1234", "standard", 0.95)
+    eng._hsrp_observe(1, img, box, clear)
+    eng._hsrp_observe(1, blank, box, ValidPlate("DL1CR1234", "standard", 0.70))
+    assert eng._hsrp_result(1) == "hsrp"
+    assert eng._hsrp_plate_read(1) == clear
