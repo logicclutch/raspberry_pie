@@ -105,3 +105,29 @@ def test_postinst_uses_helper_and_reports_config_value() -> None:
     lines = [ln for ln in text.splitlines() if "HSRP check:" in ln]
     assert lines
     assert all("HSRP_METHOD" not in ln for ln in lines)
+
+
+def _build_names() -> list[str]:
+    """Every file name build_deb.sh can produce: mode x OS x HSRP method."""
+    text = (ROOT / "deploy" / "build_deb.sh").read_text(encoding="utf-8")
+    assert 'DEB_NAME="anpr_${VERSION}${SUFFIX}${DISTTAG}${METHODTAG}_arm64.deb"' in text
+    return [
+        f"anpr_0.1.0-9{suffix}{dist}{method}_arm64.deb"
+        for suffix in ("", "_headless", "_ingest")
+        for dist in ("", "_trixie")
+        for method in ("_model", "_font")
+    ]
+
+
+def test_install_guide_commands_match_every_ingest_build_name():
+    """The client copy-pastes `scp` / `apt install` from the guide: its file pattern must match
+    each ingest build, whatever the OS and HSRP method."""
+    from fnmatch import fnmatch
+
+    guide = (ROOT / "docs" / "INSTALL_CLIENT.md").read_text(encoding="utf-8")
+    patterns = re.findall(r"(?:scp|apt install -y)\s+\.?/?(anpr_\*\S*\.deb)", guide)
+    assert len(patterns) >= 2
+    ingest = [n for n in _build_names() if "_ingest" in n]
+    for pat in patterns:
+        for name in ingest:
+            assert fnmatch(name, pat), (pat, name)

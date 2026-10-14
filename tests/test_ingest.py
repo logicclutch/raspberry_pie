@@ -1058,7 +1058,15 @@ def test_same_number_inputs_are_validator_normalised():
     # digit, so a misread B/O/S in the number part is fixed (B -> 8) before the two are compared.
     r = PlateValidator(ValidationConfig()).validate(OcrResult("MH12AB12B4", (0.99,) * 10))
     assert r is not None and r.text == "MH12AB1284"
-    assert ingest._same_number("MH12AB1284", r.text)
+    # Uncleaned, B faces the 3 as a letter and slips through as a "letter" difference.
+    assert ingest._same_number("MH12AB1234", "MH12AB12B4")
+    # Cleaned, it is the digit 8 against 3: a different vehicle in a numbered fleet.
+    assert not ingest._same_number("MH12AB1234", r.text)
+    # Letters may differ (up to SAME_NUMBER_MAX_LETTERS), digits never.
+    assert ingest._same_number("MH12AR1284", r.text)
+    assert ingest._same_number("MH12XR1284", r.text)
+    assert not ingest._same_number("XH12XR1284", r.text)
+    assert not ingest._same_number("MH12AB1285", r.text)
 
 
 def test_small_plate_is_judged_over_shifted_boxes():

@@ -306,3 +306,10 @@ def test_surest_read_one_against_one_takes_the_more_confident():
     """A worn painted plate in one image and the clean HSRP in the other: the surer read wins."""
     d = _hold_finish([("DL1CR1234", 0.80, 200), ("DL1CA1234", 0.90, 80)])
     assert d is not None and d.plate == "DL1CA1234" and d.votes == 1
+
+
+def test_majority_is_saved_when_the_surer_read_is_outnumbered():
+    """3 images of one vehicle: 2 x DL1CR1234 against 1 surer DL1CA1234. The majority is saved,
+    so the vehicle gets a decision instead of falling through to the zoom retry."""
+    d = _hold_finish([("DL1CR1234", 0.86, 200), ("DL1CR1234", 0.86, 200), ("DL1CA1234", 0.97, 200)])
+    assert d is not None and d.plate == "DL1CR1234" and d.votes == 2
