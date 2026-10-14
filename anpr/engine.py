@@ -636,6 +636,7 @@ class Engine:
             # One vehicle, several images: HSRP when every image says so, or when one image is SURE of
             # it (an HSRP on the grille + a painted copy on the bumper). A weak HSRP image against
             # other images is "not sure" - on 2-image test vehicles a weak view made 2 false HSRP.
+            # Only the classifier gives p; a font-check answer (p None) is never sure.
             from anpr.hsrp import STRONG_P, WHY_VIEWS_DISAGREE
 
             if all(lk == "hsrp" for lk in looks) or any(

@@ -496,6 +496,7 @@ _STD = np.array([0.229, 0.224, 0.225], np.float32)
 WHY_LOW_CONF = "model unsure"  # the classifier's answer was too close to the threshold
 WHY_VIEWS_DISAGREE = "images disagree"  # one image weakly HSRP, another not (no image strongly HSRP)
 STRONG_P = 0.9  # a classifier answer this sure is HSRP even when another image of the vehicle says not
+# (the font check gives no p, so a font answer never counts as this sure)
 MIN_CROP_STD = 8.0  # grey-level spread below which a plate crop shows nothing to judge
 
 
@@ -633,8 +634,10 @@ class FontCheck:
     """HSRP from the character font alone (config hsrp.method: font): "hsrp" when the first
     FONT_SAMPLE_CHARS characters of the top line are in one uniform, bold standard font
     (_standard_font), "non_hsrp" when they are not, None (with the reason) when they cannot be
-    measured. Callable like `judge`; judge() adds p (1.0 / 0.0) so
-    one HSRP-font plate of a vehicle counts as sure (anpr.engine, whole-vehicle ingest).
+    measured. Callable like `judge`; judge() adds p = None: the font check is weak (a neatly
+    printed non-HSRP plate passes it too), so a font answer is never a sure image (p >= STRONG_P).
+    In whole-vehicle ingest a font "hsrp" makes the vehicle HSRP only when every image says HSRP,
+    or when the model fallback is sure of it on some image (anpr.engine).
     `fallback` (an HsrpModel): its answer when the font cannot be measured (letters not found,
     picture too small or blurred), instead of "not sure"."""
 
@@ -680,5 +683,5 @@ class FontCheck:
         src_height = h_mid * (box.x2 - box.x1) / WORK_W
         slack = FONT_PIXEL_SLACK / src_height if src_height > 0 else 0.0
         if _standard_font(binary, [sample], min_chars=FONT_SAMPLE_CHARS, slack=slack):
-            return "hsrp", "", 1.0
-        return "non_hsrp", "", 0.0
+            return "hsrp", "", None
+        return "non_hsrp", "", None

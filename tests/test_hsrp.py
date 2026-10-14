@@ -444,7 +444,7 @@ def test_model_input_size_is_read_from_the_model_file():
 def test_font_check_judges_by_the_characters_only():
     f, box = plate(False)  # one uniform drawn font, no hologram or "IND"
     look, why, p = hsrp.FontCheck().judge(f, box)
-    assert (look, why) in (("hsrp", ""), ("non_hsrp", "")) and p in (0.0, 1.0)
+    assert (look, why) in (("hsrp", ""), ("non_hsrp", "")) and p is None
     assert hsrp.FontCheck()(f, box) == (look, why)
     blank = np.full_like(f, 40)  # nothing to measure: not sure, with the reason
     assert hsrp.FontCheck()(blank, box)[0] is None
@@ -467,7 +467,7 @@ def test_font_check_cuts_2_line_plate_whose_lines_touch():
     assert hsrp._lines(binary) is None  # as found: no clear lines
     _, (_, lines) = hsrp._split_lines(binary)
     assert len(lines) == 2
-    assert hsrp.FontCheck().judge(f, box) == ("hsrp", "", 1.0)
+    assert hsrp.FontCheck().judge(f, box) == ("hsrp", "", None)
 
 
 def test_font_check_falls_back_to_the_model_only_when_the_font_cannot_be_measured():
@@ -502,8 +502,10 @@ def test_a_font_hsrp_image_does_not_outvote_another_image(tmp_path):
 
     font = hsrp.FontCheck(SureNotModel())
     assert font.judge(img, box) == ("hsrp", "", None)  # a non-HSRP plate passes the font: no confidence
-    cfg = AppConfig(storage=StorageConfig(db_path=tmp_path / "a.db", image_dir=tmp_path / "i"),
-                    hsrp=HsrpConfig(method="font", model_path=tmp_path / "missing.onnx"))
+    cfg = AppConfig(
+        storage=StorageConfig(db_path=tmp_path / "a.db", image_dir=tmp_path / "i"),
+        hsrp=HsrpConfig(method="font", model_path=tmp_path / "missing.onnx"),
+    )
     eng = Engine(cfg, detector=None, ocr=None, store=None, hsrp_look=font)
     eng.hsrp_any_look = True  # whole-vehicle ingest
     eng._hsrp_observe(1, img, box)  # neat non-HSRP plate: the font passes
