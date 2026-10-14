@@ -661,6 +661,8 @@ def _zoom_retry(engine: Any, images: list[bytes], ts: float, dt: float) -> tuple
         return [], []
     real = engine.detector
     camera = getattr(engine, "camera", "")
+    # the retry keeps the group's whole-vehicle rules (hold the vote to the end; hsrp_any_look stays as set)
+    hold = getattr(getattr(engine, "voter", None), "hold", False)
     try:
         for raw in images:
             img = decode_image(raw)
@@ -668,6 +670,7 @@ def _zoom_retry(engine: Any, images: list[bytes], ts: float, dt: float) -> tuple
                 continue
             for box in zoom_candidates(real, img, limit=ic.zoom_max_candidates):
                 engine.reset()
+                engine.voter.hold = hold
                 engine.tracker = _SingleTrack()
                 engine.camera = camera
                 engine.detector = _FixedBoxes(box)
