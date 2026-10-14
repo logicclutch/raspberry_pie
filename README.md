@@ -124,11 +124,11 @@ file. It carries the app as **compiled bytecode only** (no `.py`), the arm64 Pyt
 models — so the Pi needs no pip, no internet (beyond a few standard apt packages), and no source.
 
 ```bash
-./deploy/build_deb.sh            # needs Docker Desktop running; builds dist/anpr_<ver>_arm64.deb
+./deploy/build_deb.sh            # needs Docker Desktop running; builds dist/anpr_<ver>_model_arm64.deb
 HEADLESS=1 ./deploy/build_deb.sh # slim, no dashboard: plates -> client API only; supports two cameras
 ```
 
-The **headless** build (`anpr_<ver>_headless_arm64.deb`) has no dashboard or open port: the engine reads
+The **headless** build (`anpr_<ver>_headless_model_arm64.deb`) has no dashboard or open port: the engine reads
 plates and POSTs them to the client's API (set in `config.yaml` `push:`). It is smaller (~63 MB vs 91 MB,
 ~255 MB vs 382 MB installed), frees RAM, and supports **two cameras on one Pi** (set `cameras:` in the
 config; each plate's JSON gets a `camera` field). Licence is activated by command line or by pre-loading

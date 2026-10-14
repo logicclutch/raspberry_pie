@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Build the client .deb (Raspberry Pi OS 64-bit Bookworm, arm64) on the Mac.
 #   ./deploy/build_deb.sh              normal build  (dashboard + API, RTSP/Pi camera)
-#                                                                           -> dist/anpr_<ver>_arm64.deb
+#                                                                           -> dist/anpr_<ver>_model_arm64.deb
 #   HEADLESS=1 ./deploy/build_deb.sh   headless (dashboard installed but OFF, API push only, two cameras)
-#                                                                           -> dist/anpr_<ver>_headless_arm64.deb
+#                                                                           -> dist/anpr_<ver>_headless_model_arm64.deb
 #   INGEST=1 ./deploy/build_deb.sh     ingest/push receiver: the ANPR camera POSTs vehicle images to the
 #                                      Pi; the Pi reads the plate and sends it on. No RTSP/video. Lightest.
 #                                      Dashboard installed but OFF (client turns it on: anpr dashboard on).
-#                                                                           -> dist/anpr_<ver>_ingest_arm64.deb
+#                                                                           -> dist/anpr_<ver>_ingest_model_arm64.deb
+#   DIST=trixie PYVER=3.13 ...     Raspberry Pi OS Trixie (python3.13)   -> dist/anpr_<ver>_..._trixie_<method>_arm64.deb
 #   HSRP_METHOD=font ...               HSRP decided by the character font only (model answers only when the
 #                                      font cannot be measured). Default HSRP_METHOD=model. Every build sets
 #                                      hsrp.method in an upgraded Pi's config.yaml too, so a model build
