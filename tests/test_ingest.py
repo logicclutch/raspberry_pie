@@ -14,10 +14,11 @@ import numpy as np
 import pytest
 
 from anpr import ingest
-from anpr.config import AppConfig, IngestConfig
+from anpr.config import AppConfig, IngestConfig, ValidationConfig
 from anpr.engine import Engine
 from anpr.storage import SqliteEventStore
 from anpr.types import Box, OcrResult, PlateEvent
+from anpr.validator import PlateValidator
 
 
 def _jpeg_bytes(w=220, h=90) -> bytes:
@@ -920,6 +921,14 @@ def test_same_number_allows_two_letters_never_a_digit():
     assert not ingest._same_number("DL1MA1846", "DL1MA1847")  # consecutive fleet numbers
     assert not ingest._same_number("DL1MA1846", "DL1MQ1847")
     assert not ingest._same_number("DL1MA1846", "DL1A1846")
+
+
+def test_same_number_inputs_are_validator_normalised():
+    # Both texts reach _same_number already cleaned by the validator: a digit slot always holds a
+    # digit, so a misread B/O/S in the number part is fixed (B -> 8) before the two are compared.
+    r = PlateValidator(ValidationConfig()).validate(OcrResult("MH12AB12B4", (0.99,) * 10))
+    assert r is not None and r.text == "MH12AB1284"
+    assert ingest._same_number("MH12AB1284", r.text)
 
 
 def test_small_plate_is_judged_over_shifted_boxes():
