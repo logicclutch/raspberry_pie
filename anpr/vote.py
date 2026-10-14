@@ -183,19 +183,21 @@ class PlateVoter:
         """hold (one vehicle's images, read together): the images disagree, e.g. a worn painted plate in
         one and the clean HSRP in another, one character apart. Take the most confident read - if it
         clears min_avg_conf and every other read is within one character of it (the same vehicle).
-        Only when no other reading has more reads: the surest read may break a tie, never overrule
-        a majority."""
+        Confidence may break a tie, never overrule a majority: the reading with the most reads leads
+        (2 x DL1CR1234 beats 1 surer DL1CA1234), judged by its own surest read."""
         if not reads:
             return None
-        best = max(reads, key=lambda r: r.confidence)
+        count = Counter(r.text for r in reads)
+        surest: dict[str, ValidPlate] = {}
+        for r in reads:
+            if r.text not in surest or r.confidence > surest[r.text].confidence:
+                surest[r.text] = r
+        best = max(surest.values(), key=lambda r: (count[r.text], r.confidence))
         if best.confidence < self._cfg.min_avg_conf:
             return None
         if any(r.text != best.text and not _one_char_apart(r.text, best.text) for r in reads):
             return None
-        count = Counter(r.text for r in reads)
         votes = count[best.text]
-        if any(n > votes for n in count.values()):
-            return None
         return Decision(best.text, best.kind, votes, best.confidence, votes / len(reads))
 
     def _end_rule(self, tv: _TrackVotes, close: list[ValidPlate]) -> Decision | None:
