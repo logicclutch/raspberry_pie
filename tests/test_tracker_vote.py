@@ -269,3 +269,40 @@ def test_sustained_close_up_still_sets_floor():
         v.observe(1, w, ts)
         ts += 0.2
     assert v.finish(1) is None
+
+
+# ---- hold mode: one vehicle's images read together (ingest) -----------------------------------
+HOLD = VoteConfig(
+    min_votes=1, min_avg_conf=0.85, min_agreement=0.7, end_min_votes=1, end_min_conf=0.95, close_ratio=0.85
+)
+
+
+def _hold_finish(reads: list[tuple[str, float, int]]):
+    """One observe + add per image (as ingest does), then finish()."""
+    v = PlateVoter(HOLD)
+    v.hold = True
+    crop = np.zeros((4, 4, 3), np.uint8)
+    for i, (text, conf, w) in enumerate(reads):
+        v.observe(1, w, i * 0.12)
+        v.add(1, vp(text, conf), crop, width=w)
+    return v.finish(1)
+
+
+@pytest.mark.parametrize(
+    "reads",
+    [
+        # 2 close-ups against 1 more confident close-up: decide() is unsure (67% < 70%)
+        [("DL1CR1234", 0.90, 200), ("DL1CR1234", 0.90, 200), ("DL1CA1234", 0.95, 200)],
+        # 3 close-ups below the confidence bar against 1 confident far read
+        [("DL1CR1234", 0.84, 200)] * 3 + [("DL1CA1234", 0.90, 80)],
+    ],
+)
+def test_surest_read_never_overrules_a_majority(reads):
+    d = _hold_finish(reads)
+    assert d is None or d.plate != "DL1CA1234"
+
+
+def test_surest_read_one_against_one_takes_the_more_confident():
+    """A worn painted plate in one image and the clean HSRP in the other: the surer read wins."""
+    d = _hold_finish([("DL1CR1234", 0.80, 200), ("DL1CA1234", 0.90, 80)])
+    assert d is not None and d.plate == "DL1CA1234" and d.votes == 1
