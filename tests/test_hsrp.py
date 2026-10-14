@@ -1,5 +1,6 @@
 """HSRP check (anpr.hsrp) on drawn plates, plus the per-track decision rule."""
 
+import logging
 from pathlib import Path
 
 import cv2
@@ -484,6 +485,26 @@ def test_font_check_falls_back_to_the_model_only_when_the_font_cannot_be_measure
     blank = np.full_like(f, 40)
     assert hsrp.FontCheck(Model()).judge(blank, box) == ("hsrp", "", 0.86)  # font can't: the model
     assert hsrp.FontCheck().judge(blank, box)[0] is None  # no model: not sure, as before
+
+
+def test_font_check_logs_when_the_model_decides(caplog):
+    # hsrp.method font: when the font cannot be measured the model answers instead. The log must say
+    # so, with the font's reason, so it is clear which method decided the plate.
+    class Model:
+        def judge(self, frame, box):
+            return "hsrp", "", 0.86
+
+    caplog.set_level(logging.DEBUG, logger="anpr.hsrp")
+    f, box = plate(False)
+    blank = np.full_like(f, 40)
+    font_why = hsrp.FontCheck().judge(blank, box)[1]
+    assert hsrp.FontCheck(Model()).judge(blank, box) == ("hsrp", "", 0.86)  # the answer is unchanged
+    said = [r.getMessage() for r in caplog.records if "font not measured" in r.getMessage()]
+    assert len(said) == 1 and "model" in said[0] and font_why in said[0]
+
+    caplog.clear()
+    hsrp.FontCheck(Model()).judge(f, box)  # the font can measure this plate: the model is not asked
+    assert not [r for r in caplog.records if "font not measured" in r.getMessage()]
 
 
 def test_a_font_hsrp_image_does_not_outvote_another_image(tmp_path):
