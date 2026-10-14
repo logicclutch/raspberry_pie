@@ -168,11 +168,14 @@ class HsrpConfig(_Section):
     # (anpr.hsrp). Judged on the frames read before the plate is saved.
     enabled: bool = True
     # model: a small trained classifier looks at the plate (anpr.hsrp.HsrpModel, models/hsrp/); much
-    #   more accurate than the hand-written checks. rules: the hand-written checks below (rule,
-    #   weights, two_line). If the model file is missing, the rules are used.
-    # font: ONLY the character font decides (every character the same height and stroke thickness, the
-    #   bold standard HSRP font) - no hologram / "IND" / classifier. Measured much weaker than "model"
-    #   (neat printed non-HSRP plates pass it); for comparison tests.
+    #   more accurate than the hand-written checks. If the model file is missing, method model uses
+    #   the rules instead. rules: the hand-written checks below (rule, weights, two_line).
+    # font: the character font decides (every character the same height and stroke thickness, the
+    #   bold standard HSRP font). When the font cannot be measured (letters not found, picture too
+    #   small, blurred or low contrast) and the model file exists, the trained classifier answers
+    #   instead (with two_line_marks, its hologram + "IND" check too). Without the model file such a
+    #   plate is "not sure". Measured much weaker than "model" (neat printed non-HSRP plates pass
+    #   it); for comparison tests.
     method: Literal["model", "rules", "font"] = "model"
     model_path: Path = Path("models/hsrp/hsrp_cls.onnx")
     # Model output p = chance the plate is HSRP. p >= threshold -> HSRP. Within `margin` of the

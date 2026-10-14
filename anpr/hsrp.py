@@ -651,7 +651,10 @@ class FontCheck:
     def judge(self, frame: np.ndarray, box: Box) -> tuple[HsrpLook | None, str, float | None]:
         look, why, p = self._font(frame, box)
         if look is None and self.fallback is not None:
-            return self.fallback.judge(frame, box)
+            look2, why2, p2 = self.fallback.judge(frame, box)
+            said = look2 or f"not sure ({why2})"
+            log.debug("hsrp font not measured (%s): model decided %s p=%s", why, said, p2)
+            return look2, why2, p2
         return look, why, p
 
     def _font(self, frame: np.ndarray, box: Box) -> tuple[HsrpLook | None, str, float | None]:
