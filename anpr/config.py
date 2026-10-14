@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -371,3 +372,42 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     path = Path(path)
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return AppConfig.model_validate(data).resolve_paths(path.parent.resolve())
+
+
+def set_hsrp_method(path: str | Path, method: str) -> None:
+    """Set hsrp.method in a config.yaml, keeping every other line and comment as it is.
+
+    Used by the .deb install (deploy/deb/postinst) on the Pi's kept config.yaml. Replaces the
+    "method:" line in the hsrp: section, adds it when the section has none (configs from 0.1.0-1 and
+    -2), and adds an hsrp: section when there is none. Then reads the file back and raises
+    ValueError (file left as it was) unless hsrp.method is now `method` and nothing else changed.
+    """
+    allowed = get_args(HsrpConfig.model_fields["method"].annotation)
+    if method not in allowed:
+        raise ValueError(f"hsrp.method must be one of {', '.join(allowed)}, not {method!r}")
+    path = Path(path)
+    old_text = path.read_text(encoding="utf-8")
+    lines = old_text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    start = next((i for i, ln in enumerate(lines) if re.match(r"hsrp:\s*(#.*)?$", ln)), None)
+    if start is None:
+        lines += ["hsrp:\n", f"  method: {method}\n"]
+    else:
+        end = next((i for i in range(start + 1, len(lines)) if re.match(r"[A-Za-z_]", lines[i])), len(lines))
+        keys = [ln for ln in lines[start + 1 : end] if ln.strip() and not ln.lstrip().startswith("#")]
+        indent = re.match(r"\s*", keys[0]).group() if keys else "  "
+        found = [i for i in range(start + 1, end) if re.match(rf"{indent}method:", lines[i])]
+        if found:
+            lines[found[0]] = f"{indent}method: {method}\n"
+        else:
+            lines.insert(start + 1, f"{indent}method: {method}\n")
+    new_text = "".join(lines)
+
+    expected = yaml.safe_load(old_text) or {}
+    if not isinstance(expected.get("hsrp") or {}, dict):
+        raise ValueError(f"hsrp: in {path} is not a section; set hsrp.method by hand")
+    expected["hsrp"] = {**(expected.get("hsrp") or {}), "method": method}
+    if yaml.safe_load(new_text) != expected:
+        raise ValueError(f"could not set hsrp.method: {method} in {path}; set it by hand")
+    path.write_text(new_text, encoding="utf-8")
