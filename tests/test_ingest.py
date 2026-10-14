@@ -687,6 +687,17 @@ def test_zoom_retry_skipped_when_first_pass_reads(store, _crop_by_box):
     assert eng.detector.calls == 1
 
 
+@pytest.mark.parametrize("readable_x1", [200, 20], ids=["first-pass", "zoom-retry"])
+def test_zoom_retry_keeps_whole_vehicle_vote(store, _crop_by_box, readable_x1):
+    """The zoom retry must use the same whole-vehicle vote rules as the first pass: with the default vote
+    settings (min_votes 3), one clear read is kept at the end of the vehicle, whichever look found it."""
+    cfg = AppConfig(ingest=IngestConfig(enabled=True))
+    cfg = cfg.model_copy(update={"hsrp": cfg.hsrp.model_copy(update={"enabled": False})})
+    assert cfg.vote.min_votes == 3 and cfg.ingest.whole_vehicle and cfg.ingest.zoom_fallback
+    eng = Engine(cfg, _TileDetector(), _BoxOcr({readable_x1: "DL1MA1846"}), store, motion=lambda _f: True)
+    assert [e.plate for e in ingest.process_group(eng, [_jpeg_bytes(400, 400)], None)] == ["DL1MA1846"]
+
+
 def test_ingest_exits_cleanly_above_the_memory_limit(tmp_path, monkeypatch):
     """Heavy load on the Pi: above runtime.max_rss_mb the receiver stops itself (drains, returns
     EXIT_MEMORY so systemd restarts it) instead of being killed by MemoryMax mid-write."""
