@@ -131,3 +131,12 @@ def test_install_guide_commands_match_every_ingest_build_name():
     for pat in patterns:
         for name in ingest:
             assert fnmatch(name, pat), (pat, name)
+
+
+def test_set_hsrp_method_accepts_combined(tmp_path: Path) -> None:
+    conf = tmp_path / "config.yaml"
+    conf.write_text(NEW_CONFIG, encoding="utf-8")
+
+    _set_hsrp_method()(conf, "combined")
+
+    assert load_config(conf).hsrp.method == "combined"

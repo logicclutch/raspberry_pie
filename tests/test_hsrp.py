@@ -573,3 +573,79 @@ def test_the_number_comes_from_the_font_measured_image_not_the_model_fallback(tm
     eng._hsrp_observe(1, blank, box, ValidPlate("DL1CR1234", "standard", 0.70))
     assert eng._hsrp_result(1) == "hsrp"
     assert eng._hsrp_plate_read(1) == clear
+
+
+# ---- combined (config hsrp.method: combined): the model decides, the font breaks its "not sure" ----
+
+
+class _StubFont:
+    """A font check with a fixed answer; counts how often it is asked."""
+
+    def __init__(self, look, why=""):
+        self.look, self.why, self.calls = look, why, 0
+
+    def judge(self, frame, box):
+        self.calls += 1
+        return self.look, self.why, None
+
+
+@pytest.mark.parametrize(
+    ("p", "font_look", "want"),
+    [
+        (0.97, "non_hsrp", ("hsrp", "", 0.97)),  # model sure: the model decides, even against the font
+        (0.2, "hsrp", ("non_hsrp", "", 0.2)),  # model sure not HSRP: the font's pass does not matter
+        (0.55, "hsrp", ("hsrp", "", 0.55)),  # model unsure, leans HSRP, font agrees: HSRP
+        (0.45, "non_hsrp", ("non_hsrp", "", 0.45)),  # model unsure, leans not, font agrees: non-HSRP
+        (0.55, "non_hsrp", (None, hsrp.WHY_LOW_CONF, 0.55)),  # they disagree: not sure
+        (0.45, "hsrp", (None, hsrp.WHY_LOW_CONF, 0.45)),  # they disagree: not sure
+        (0.55, None, (None, hsrp.WHY_LOW_CONF, 0.55)),  # font cannot measure: the model's not sure
+    ],
+)
+def test_combined_check_model_decides_and_font_breaks_its_not_sure(p, font_look, want):
+    f, box = plate(True)
+    font = _StubFont(font_look, "" if font_look else hsrp.WHY_NO_TEXT)
+    assert hsrp.CombinedCheck(_FakeModel(p), font).judge(f, box) == want
+    assert hsrp.CombinedCheck(_FakeModel(p), font)(f, box) == want[:2]
+
+
+def test_combined_check_asks_the_font_only_when_the_model_is_unsure():
+    f, box = plate(True)
+    font = _StubFont("non_hsrp")
+    hsrp.CombinedCheck(_FakeModel(0.97), font).judge(f, box)
+    hsrp.CombinedCheck(_FakeModel(0.1), font).judge(f, box)
+    assert font.calls == 0  # sure model answers cost no font check
+    assert hsrp.CombinedCheck(_FakeModel(None), font).judge(f, box) == (None, hsrp.WHY_NO_PLATE, None)
+    assert font.calls == 0  # no crop for the model: nothing for the font either
+    hsrp.CombinedCheck(_FakeModel(0.5), font).judge(f, box)
+    assert font.calls == 1
+
+
+def test_combined_check_uses_the_real_font_check_by_default():
+    assert isinstance(hsrp.CombinedCheck(_FakeModel(0.5)).font, hsrp.FontCheck)
+    assert hsrp.CombinedCheck(_FakeModel(0.5)).font.fallback is None  # the font never asks the model back
+
+
+def test_combined_method_is_a_config_choice():
+    from anpr.config import HsrpConfig
+
+    assert HsrpConfig(method="combined").method == "combined"
+
+
+def test_engine_builds_the_combined_check(tmp_path, monkeypatch):
+    from anpr import engine as engine_mod
+    from anpr.config import AppConfig, HsrpConfig, StorageConfig
+    from anpr.engine import Engine
+
+    model_file = tmp_path / "m.onnx"
+    model_file.write_bytes(b"x")
+    monkeypatch.setattr(engine_mod, "_shared_hsrp_model", lambda *a, **k: _FakeModel(0.5))
+    cfg = AppConfig(
+        storage=StorageConfig(db_path=tmp_path / "a.db", image_dir=tmp_path / "i"),
+        hsrp=HsrpConfig(method="combined", model_path=model_file),
+    )
+    eng = Engine(cfg, detector=None, ocr=None, store=None)
+    assert isinstance(eng.hsrp_look, hsrp.CombinedCheck)
+    assert eng._hsrp_is_model  # one sure look decides, as in model mode
+    missing = cfg.model_copy(update={"hsrp": HsrpConfig(method="combined", model_path=tmp_path / "no.onnx")})
+    look = Engine(missing, detector=None, ocr=None, store=None).hsrp_look
+    assert isinstance(look, hsrp.FontCheck)  # no model file: the font alone
