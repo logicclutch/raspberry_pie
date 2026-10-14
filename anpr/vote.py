@@ -182,7 +182,9 @@ class PlateVoter:
     def _surest_read(self, reads: list[ValidPlate]) -> Decision | None:
         """hold (one vehicle's images, read together): the images disagree, e.g. a worn painted plate in
         one and the clean HSRP in another, one character apart. Take the most confident read - if it
-        clears min_avg_conf and every other read is within one character of it (the same vehicle)."""
+        clears min_avg_conf and every other read is within one character of it (the same vehicle).
+        Only when no other reading has more reads: the surest read may break a tie, never overrule
+        a majority."""
         if not reads:
             return None
         best = max(reads, key=lambda r: r.confidence)
@@ -190,7 +192,10 @@ class PlateVoter:
             return None
         if any(r.text != best.text and not _one_char_apart(r.text, best.text) for r in reads):
             return None
-        votes = sum(r.text == best.text for r in reads)
+        count = Counter(r.text for r in reads)
+        votes = count[best.text]
+        if any(n > votes for n in count.values()):
+            return None
         return Decision(best.text, best.kind, votes, best.confidence, votes / len(reads))
 
     def _end_rule(self, tv: _TrackVotes, close: list[ValidPlate]) -> Decision | None:
