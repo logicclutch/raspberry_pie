@@ -205,6 +205,19 @@ class Engine:
                 fallback = _shared_hsrp_model(c.model_path, c.threshold, c.margin, c.two_line_marks)
             hsrp_look = FontCheck(fallback)
             log.info("hsrp: font check (hsrp.method: font), model fallback: %s", fallback is not None)
+        if hsrp_look is None and cfg.hsrp.enabled and cfg.hsrp.method == "combined":
+            from pathlib import Path
+
+            from anpr.hsrp import CombinedCheck, FontCheck
+
+            c = cfg.hsrp
+            if Path(c.model_path).is_file():
+                model = _shared_hsrp_model(c.model_path, c.threshold, c.margin, c.two_line_marks)
+                hsrp_look = CombinedCheck(model)
+                log.info("hsrp: combined (hsrp.method: combined): model decides, font breaks its not sure")
+            else:
+                hsrp_look = FontCheck()
+                log.warning("hsrp: model %s not found, combined uses the font check alone", c.model_path)
         if hsrp_look is None and cfg.hsrp.enabled and cfg.hsrp.method == "model":
             from pathlib import Path
 
@@ -225,9 +238,9 @@ class Engine:
                 rule=cfg.hsrp.rule,
             )
         self.hsrp_look = hsrp_look
-        from anpr.hsrp import HsrpModel
+        from anpr.hsrp import CombinedCheck, HsrpModel
 
-        self._hsrp_is_model = isinstance(hsrp_look, HsrpModel)
+        self._hsrp_is_model = isinstance(hsrp_look, (HsrpModel, CombinedCheck))
         self._hsrp_max_looks = HSRP_MODEL_MAX_LOOKS if self._hsrp_is_model else HSRP_MAX_LOOKS
         # per track: (plate width, look, why not judged, classifier p or None, the read of that view)
         self._hsrp: dict[int, list[tuple[int, str | None, str, float | None, ValidPlate | None]]] = {}

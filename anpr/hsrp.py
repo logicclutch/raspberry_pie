@@ -596,6 +596,35 @@ class HsrpModel:
         return not isinstance(found, str) and passes(found, "close")
 
 
+class CombinedCheck:
+    """HSRP from the trained classifier and the character font together (config hsrp.method:
+    combined). The model decides whenever it is sure - agreeing with the font or not, since the font
+    is weak (a neatly printed non-HSRP plate passes it). Only when the model is unsure (p within
+    `margin` of the threshold) is the font asked: when it measures the same answer the model leans
+    to, that answer is given (with the model's p, so it never counts as a sure image); when it
+    disagrees or cannot measure, the plate stays "not sure". Callable like `judge`."""
+
+    def __init__(self, model, font=None) -> None:
+        self.model = model
+        self.font = font if font is not None else FontCheck()  # no fallback: the model was asked already
+
+    def __call__(self, frame: np.ndarray, box: Box) -> tuple[HsrpLook | None, str]:
+        look, why, _ = self.judge(frame, box)
+        return look, why
+
+    def judge(self, frame: np.ndarray, box: Box) -> tuple[HsrpLook | None, str, float | None]:
+        look, why, p = self.model.judge(frame, box)
+        if look is not None or why != WHY_LOW_CONF or p is None:
+            return look, why, p
+        lean = "hsrp" if p >= self.model.threshold else "non_hsrp"
+        font_look, font_why, _ = self.font.judge(frame, box)
+        if font_look == lean:
+            log.debug("hsrp model unsure p=%.3f, font agrees: %s", p, lean)
+            return lean, "", p
+        log.debug("hsrp model unsure p=%.3f leans %s, font says %s", p, lean, font_look or font_why)
+        return None, WHY_LOW_CONF, p
+
+
 def _split_lines(binary: np.ndarray) -> tuple[np.ndarray, tuple[float, list[list[Char]]]] | None:
     """A 2-line plate whose lines touch (small, blurred or tilted picture): a top-line letter joins
     the one below it into one blob about two lines tall. Cut each such blob at its thinnest row

@@ -13,6 +13,8 @@
 #                                      font cannot be measured). Default HSRP_METHOD=model. Every build sets
 #                                      hsrp.method in an upgraded Pi's config.yaml too, so a model build
 #                                      switches a Pi that had a font build back to the model.
+#   HSRP_METHOD=combined ...           the model decides; when it is unsure the font check breaks the tie
+#                                      (only when it agrees with the way the model leans).
 #                                                                           -> dist/anpr_<ver>_..._<method>_arm64.deb
 # Needs Docker with arm64 emulation (Docker Desktop / colima with qemu).
 #

@@ -177,7 +177,10 @@ class HsrpConfig(_Section):
     #   instead (with two_line_marks, its hologram + "IND" check too). Without the model file such a
     #   plate is "not sure". Measured much weaker than "model" (neat printed non-HSRP plates pass
     #   it); for comparison tests.
-    method: Literal["model", "rules", "font"] = "model"
+    # combined: the model decides when it is sure; when it is unsure (p within `margin` of the
+    #   threshold) the font check breaks the tie - its answer counts only if it matches the way the
+    #   model leans, otherwise "not sure". Without the model file: the font alone.
+    method: Literal["model", "rules", "font", "combined"] = "model"
     model_path: Path = Path("models/hsrp/hsrp_cls.onnx")
     # Model output p = chance the plate is HSRP. p >= threshold -> HSRP. Within `margin` of the
     # threshold the frame is "not sure" (not judged) instead of a coin toss.
