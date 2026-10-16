@@ -117,8 +117,15 @@ def _all_events(store):
 def test_camera_name_flows_into_the_api_json(store):
     e = store.add_event(
         PlateEvent(
-            plate="MH12AB1234", kind="standard", confidence=0.9, votes=3, track_id=1,
-            first_seen=time.time() - 1, last_seen=time.time(), hsrp="hsrp", camera="exit",
+            plate="MH12AB1234",
+            kind="standard",
+            confidence=0.9,
+            votes=3,
+            track_id=1,
+            first_seen=time.time() - 1,
+            last_seen=time.time(),
+            hsrp="hsrp",
+            camera="exit",
         )
     )
     payload = push.event_payload(e, "pi-1", store, include_images=False)
@@ -129,8 +136,13 @@ def test_camera_name_flows_into_the_api_json(store):
 def test_single_camera_has_blank_camera_field(store):
     e = store.add_event(
         PlateEvent(
-            plate="MH12AB1234", kind="standard", confidence=0.9, votes=3, track_id=1,
-            first_seen=time.time() - 1, last_seen=time.time(),
+            plate="MH12AB1234",
+            kind="standard",
+            confidence=0.9,
+            votes=3,
+            track_id=1,
+            first_seen=time.time() - 1,
+            last_seen=time.time(),
         )
     )
     assert e.camera is None

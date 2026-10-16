@@ -846,7 +846,8 @@ def test_real_hsrp_check_runs_by_default(cfg, store):
     events = [e for i in range(3) for e in eng.process(FRAME, 1000 + i * 0.3)]
     # black frame: can't be judged -> "not sure" with a short reason (model: nothing to see; rules: no text)
     assert [(e.plate, e.hsrp) for e in events] in (
-        [("MH12AB1234", "not sure: low contrast")], [("MH12AB1234", "not sure: text not found")]
+        [("MH12AB1234", "not sure: low contrast")],
+        [("MH12AB1234", "not sure: text not found")],
     )
 
 

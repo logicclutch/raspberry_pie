@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # Build the client .deb (Raspberry Pi OS 64-bit Bookworm, arm64) on the Mac.
 #   ./deploy/build_deb.sh              normal build  (dashboard + API, RTSP/Pi camera)
-#                                                                           -> dist/anpr_<ver>_arm64.deb
+#                                                                           -> dist/anpr_<ver>_model_arm64.deb
 #   HEADLESS=1 ./deploy/build_deb.sh   headless (dashboard installed but OFF, API push only, two cameras)
-#                                                                           -> dist/anpr_<ver>_headless_arm64.deb
+#                                                                           -> dist/anpr_<ver>_headless_model_arm64.deb
 #   INGEST=1 ./deploy/build_deb.sh     ingest/push receiver: the ANPR camera POSTs vehicle images to the
 #                                      Pi; the Pi reads the plate and sends it on. No RTSP/video. Lightest.
 #                                      Dashboard installed but OFF (client turns it on: anpr dashboard on).
-#                                                                           -> dist/anpr_<ver>_ingest_arm64.deb
+#                                                                           -> dist/anpr_<ver>_ingest_model_arm64.deb
+#   DIST=trixie PYVER=3.13 ...     Raspberry Pi OS Trixie (python3.13)   -> dist/anpr_<ver>_..._trixie_<method>_arm64.deb
 #   HSRP_METHOD=font ...               HSRP decided by the character font only (model answers only when the
-#                                      font cannot be measured); also switches an upgraded Pi's config.yaml.
-#                                                                           -> dist/anpr_<ver>_..._font_arm64.deb
+#                                      font cannot be measured). Default HSRP_METHOD=model. Every build sets
+#                                      hsrp.method in an upgraded Pi's config.yaml too, so a model build
+#                                      switches a Pi that had a font build back to the model.
+#   HSRP_METHOD=combined ...           the model decides; when it is unsure the font check breaks the tie
+#                                      (only when it agrees with the way the model leans).
+#                                                                           -> dist/anpr_<ver>_..._<method>_arm64.deb
 # Needs Docker with arm64 emulation (Docker Desktop / colima with qemu).
 #
 # What the package contains:
@@ -30,7 +35,7 @@ VER_PY=$(sed -nE 's/^version = "([^"]+)"/\1/p' "$SRC/pyproject.toml" | head -1)
 VERSION="${VERSION:-${VER_PY}-1}"
 HEADLESS="${HEADLESS:-0}"
 INGEST="${INGEST:-0}"
-HSRP_METHOD="${HSRP_METHOD:-}"  # empty: the config template's hsrp.method (model)
+HSRP_METHOD="${HSRP_METHOD:-model}"  # always pinned: new installs and upgrades both get this method
 # Target OS / Python. Default = Raspberry Pi OS Bookworm (python3.11). For Raspberry Pi OS Trixie set
 # DIST=trixie PYVER=3.13. The venv is built in that exact base so the Pi needs no pip.
 DIST="${DIST:-bookworm}"

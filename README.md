@@ -100,7 +100,7 @@ still 56/56; no Kaggle non-HSRP plate changes (the font check alone is not used:
 it). Camera-push (ingest) mode adds a **second plate check** (`ingest.second_plate_check`, on): trucks often carry an
 HSRP on the grille and an old painted copy on the bumper, and the detector may only see the painted one. When a
 vehicle comes out not HSRP, a zoomed look searches its first images for another plate of the same vehicle (near it,
-about its size, same number - only a letter may differ, never a digit); if that plate is HSRP the vehicle is saved as
+about its size, same number - up to 2 letters may differ, never a digit); if that plate is HSRP the vehicle is saved as
 `hsrp`, and a confirmed, clearly surer reading of it replaces the number. On 1,106 labelled photos it changed only
 the two photos of one such truck (both to the right number and `hsrp`), no non-HSRP vehicle.
 `hsrp.method: rules` falls back to the hand-written hologram / "IND" checks. A camera can only tell what a plate *looks like*: a good copy of an HSRP passes.
@@ -124,11 +124,11 @@ file. It carries the app as **compiled bytecode only** (no `.py`), the arm64 Pyt
 models — so the Pi needs no pip, no internet (beyond a few standard apt packages), and no source.
 
 ```bash
-./deploy/build_deb.sh            # needs Docker Desktop running; builds dist/anpr_<ver>_arm64.deb
+./deploy/build_deb.sh            # needs Docker Desktop running; builds dist/anpr_<ver>_model_arm64.deb
 HEADLESS=1 ./deploy/build_deb.sh # slim, no dashboard: plates -> client API only; supports two cameras
 ```
 
-The **headless** build (`anpr_<ver>_headless_arm64.deb`) has no dashboard or open port: the engine reads
+The **headless** build (`anpr_<ver>_headless_model_arm64.deb`) has no dashboard or open port: the engine reads
 plates and POSTs them to the client's API (set in `config.yaml` `push:`). It is smaller (~63 MB vs 91 MB,
 ~255 MB vs 382 MB installed), frees RAM, and supports **two cameras on one Pi** (set `cameras:` in the
 config; each plate's JSON gets a `camera` field). Licence is activated by command line or by pre-loading

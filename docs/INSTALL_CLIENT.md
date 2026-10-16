@@ -25,7 +25,8 @@ Two addresses are involved:
   say `aarch64`. Use **Raspberry Pi Imager**; enable **SSH** and set a username/password so you can reach
   the Pi over the network.
 - The Pi on your network (cable or Wi-Fi), reachable by SSH, **and reachable by the camera** (same LAN).
-- The **one file** you received: `anpr_<version>_ingest_arm64.deb`.
+- The **one file** you received, e.g. `anpr_0.1.0-9_ingest_trixie_model_arm64.deb` (the name starts
+  with `anpr_`, contains `ingest` and ends in `_arm64.deb`).
 - Your **ANPR camera** (e.g. GVD) that can POST a vehicle image on a plate event (HTTP upload).
 
 > The Pi needs the internet **once** during install (to fetch a few standard system packages). After
@@ -37,13 +38,13 @@ Two addresses are involved:
 
 From your computer (replace `PI-IP` with the Pi's address, e.g. `192.168.1.50`):
 ```
-scp anpr_*_ingest_arm64.deb  pi@PI-IP:~
+scp anpr_*ingest*_arm64.deb  pi@PI-IP:~
 ssh pi@PI-IP
 ```
 On the Pi:
 ```
 sudo apt update
-sudo apt install -y ./anpr_*_ingest_arm64.deb
+sudo apt install -y ./anpr_*ingest*_arm64.deb
 ```
 That is the whole install — it sets everything up and **starts automatically on boot**. When it finishes
 it prints the **device ID** and the **address the camera posts to** — keep both.
@@ -179,7 +180,7 @@ One file controls everything; it survives updates. Edit, then `sudo systemctl re
 
 ## Updating / renewing
 
-- **New version:**  `sudo apt install -y ./anpr_<new-version>_ingest_arm64.deb` — settings, licence and
+- **New version:**  `sudo apt install -y ./anpr_<new-version>_ingest_..._arm64.deb` (the new file's full name) — settings, licence and
   saved plates are kept; it restarts itself.
 - **Renew / add a Pi:**  send the Pi's device ID (`anpr ingest --machine-id`) to the supplier and enter
   the new key with `--activate`, like Step 2.

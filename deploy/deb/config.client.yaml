@@ -66,6 +66,7 @@ hsrp:
   min_clean: 3
   # model = trained classifier (models/hsrp/hsrp_cls.onnx, 97.9% on held-out Indian photos); rules = the
   # hand-written checks below (rule / two_line). Missing model file -> rules.
+  # combined = model decides; when it is unsure, the font check counts only if it agrees with its lean.
   method: model
   model_path: models/hsrp/hsrp_cls.onnx
   threshold: 0.5   # classifier says HSRP at or above this

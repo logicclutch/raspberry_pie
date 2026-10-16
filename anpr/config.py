@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -168,12 +169,18 @@ class HsrpConfig(_Section):
     # (anpr.hsrp). Judged on the frames read before the plate is saved.
     enabled: bool = True
     # model: a small trained classifier looks at the plate (anpr.hsrp.HsrpModel, models/hsrp/); much
-    #   more accurate than the hand-written checks. rules: the hand-written checks below (rule,
-    #   weights, two_line). If the model file is missing, the rules are used.
-    # font: ONLY the character font decides (every character the same height and stroke thickness, the
-    #   bold standard HSRP font) - no hologram / "IND" / classifier. Measured much weaker than "model"
-    #   (neat printed non-HSRP plates pass it); for comparison tests.
-    method: Literal["model", "rules", "font"] = "model"
+    #   more accurate than the hand-written checks. If the model file is missing, method model uses
+    #   the rules instead. rules: the hand-written checks below (rule, weights, two_line).
+    # font: the character font decides (every character the same height and stroke thickness, the
+    #   bold standard HSRP font). When the font cannot be measured (letters not found, picture too
+    #   small, blurred or low contrast) and the model file exists, the trained classifier answers
+    #   instead (with two_line_marks, its hologram + "IND" check too). Without the model file such a
+    #   plate is "not sure". Measured much weaker than "model" (neat printed non-HSRP plates pass
+    #   it); for comparison tests.
+    # combined: the model decides when it is sure; when it is unsure (p within `margin` of the
+    #   threshold) the font check breaks the tie - its answer counts only if it matches the way the
+    #   model leans, otherwise "not sure". Without the model file: the font alone.
+    method: Literal["model", "rules", "font", "combined"] = "model"
     model_path: Path = Path("models/hsrp/hsrp_cls.onnx")
     # Model output p = chance the plate is HSRP. p >= threshold -> HSRP. Within `margin` of the
     # threshold the frame is "not sure" (not judged) instead of a coin toss.
@@ -263,10 +270,10 @@ class IngestConfig(_Section):
     zoom_fallback: bool = True
     zoom_max_candidates: int = Field(4, ge=1, le=16)  # plate boxes tried per image in the second look
     # Second plate check: a vehicle whose plate came out not HSRP is searched (zoomed tiles, first
-    # second_plate_images images) for another plate with the same number (1 character may differ); if
+    # second_plate_images images) for another plate with the same number (up to 2 letters may differ); if
     # that plate is HSRP, the vehicle is saved as "hsrp". Trucks often carry an HSRP on the grille and an
     # old painted copy on the bumper, and the detector may only see the painted one. The other plate
-    # must be near the first and about its size; only a letter may differ (never a digit). Only when
+    # must be near the first and about its size; only letters may differ, at most 2 (never a digit). Only when
     # the result is not HSRP: ~1-2 s more per such vehicle on a Pi 3B+ - after the camera's reply with
     # fast_ack, but inside the reply with respond_with_plate.
     second_plate_check: bool = True
@@ -368,3 +375,42 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     path = Path(path)
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return AppConfig.model_validate(data).resolve_paths(path.parent.resolve())
+
+
+def set_hsrp_method(path: str | Path, method: str) -> None:
+    """Set hsrp.method in a config.yaml, keeping every other line and comment as it is.
+
+    Used by the .deb install (deploy/deb/postinst) on the Pi's kept config.yaml. Replaces the
+    "method:" line in the hsrp: section, adds it when the section has none (configs from 0.1.0-1 and
+    -2), and adds an hsrp: section when there is none. Then reads the file back and raises
+    ValueError (file left as it was) unless hsrp.method is now `method` and nothing else changed.
+    """
+    allowed = get_args(HsrpConfig.model_fields["method"].annotation)
+    if method not in allowed:
+        raise ValueError(f"hsrp.method must be one of {', '.join(allowed)}, not {method!r}")
+    path = Path(path)
+    old_text = path.read_text(encoding="utf-8")
+    lines = old_text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    start = next((i for i, ln in enumerate(lines) if re.match(r"hsrp:\s*(#.*)?$", ln)), None)
+    if start is None:
+        lines += ["hsrp:\n", f"  method: {method}\n"]
+    else:
+        end = next((i for i in range(start + 1, len(lines)) if re.match(r"[A-Za-z_]", lines[i])), len(lines))
+        keys = [ln for ln in lines[start + 1 : end] if ln.strip() and not ln.lstrip().startswith("#")]
+        indent = re.match(r"\s*", keys[0]).group() if keys else "  "
+        found = [i for i in range(start + 1, end) if re.match(rf"{indent}method:", lines[i])]
+        if found:
+            lines[found[0]] = f"{indent}method: {method}\n"
+        else:
+            lines.insert(start + 1, f"{indent}method: {method}\n")
+    new_text = "".join(lines)
+
+    expected = yaml.safe_load(old_text) or {}
+    if not isinstance(expected.get("hsrp") or {}, dict):
+        raise ValueError(f"hsrp: in {path} is not a section; set hsrp.method by hand")
+    expected["hsrp"] = {**(expected.get("hsrp") or {}), "method": method}
+    if yaml.safe_load(new_text) != expected:
+        raise ValueError(f"could not set hsrp.method: {method} in {path}; set it by hand")
+    path.write_text(new_text, encoding="utf-8")

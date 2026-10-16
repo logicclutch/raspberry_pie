@@ -464,7 +464,9 @@ SMALL_PLATE_PX = 100  # a second plate narrower than this is judged over several
 def _same_number(a: str, b: str) -> bool:
     """The same plate read twice (e.g. a worn painted copy and a small HSRP): equal, or up to
     SAME_NUMBER_MAX_LETTERS letters different (A/R, M/H, Q/A...). A differing digit is never allowed:
-    fleets run consecutive numbers (..1234, ..1235)."""
+    fleets run consecutive numbers (..1234, ..1235). Both texts are already cleaned by the validator, so
+    a digit slot always holds a digit (a misread 8/B, 0/O, 5/S there is fixed before this point). The one
+    place a digit can face a letter is Delhi's 1-digit district (DL1S.. vs DL15..); that is allowed."""
     if len(a) != len(b):
         return False
     diff = [(x, y) for x, y in zip(a, b, strict=True) if x != y]
@@ -659,6 +661,8 @@ def _zoom_retry(engine: Any, images: list[bytes], ts: float, dt: float) -> tuple
         return [], []
     real = engine.detector
     camera = getattr(engine, "camera", "")
+    # the retry keeps the group's whole-vehicle rules (hold the vote to the end; hsrp_any_look stays as set)
+    hold = getattr(getattr(engine, "voter", None), "hold", False)
     try:
         for raw in images:
             img = decode_image(raw)
@@ -666,6 +670,7 @@ def _zoom_retry(engine: Any, images: list[bytes], ts: float, dt: float) -> tuple
                 continue
             for box in zoom_candidates(real, img, limit=ic.zoom_max_candidates):
                 engine.reset()
+                engine.voter.hold = hold
                 engine.tracker = _SingleTrack()
                 engine.camera = camera
                 engine.detector = _FixedBoxes(box)

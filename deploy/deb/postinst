@@ -26,9 +26,15 @@ elif ! grep -qE '^  admin_token:' "$APP/config.yaml"; then
   NEW_ADMIN=$("$APP/.venv/bin/python" -c 'import secrets; print(secrets.token_urlsafe(12))')
   sed -i -E "s|^(  auth_token:.*)$|\1\n  admin_token: $NEW_ADMIN   # admin password (Activate / Settings / Add stream)|" "$APP/config.yaml"
 fi
-# A build with a fixed HSRP method (HSRP_METHOD=font) applies it to the kept config.yaml too.
+# The build's HSRP method (HSRP_METHOD file) is applied to the kept config.yaml too. Adds the method
+# line when an older config.yaml has none, and stops the install if it cannot be set.
 if [ -f "$APP/HSRP_METHOD" ]; then
-  sed -i -E "/^hsrp:/,/^[a-z]/ s|^  method: .*|  method: $(cat "$APP/HSRP_METHOD")|" "$APP/config.yaml"
+  "$APP/.venv/bin/python" -s -c "
+import sys
+sys.path.insert(0, '$APP/lib')
+from anpr.config import set_hsrp_method
+set_hsrp_method(sys.argv[1], sys.argv[2])
+" "$APP/config.yaml" "$(cat "$APP/HSRP_METHOD")"
 fi
 chown anpr:anpr "$APP/config.yaml"
 chmod 640 "$APP/config.yaml"
@@ -73,7 +79,14 @@ DEVID=$("$APP/bin/anpr" engine --machine-id 2>/dev/null || echo '?')
 echo ""
 echo "ANPR $(cat "$APP/VERSION") installed in $APP"
 echo "  device ID:  $DEVID  (send it to the supplier for the licence)"
-[ ! -f "$APP/HSRP_METHOD" ] || echo "  HSRP check: $(cat "$APP/HSRP_METHOD")  (hsrp.method in $APP/config.yaml)"
+# What the service will really use: hsrp.method as written in config.yaml (missing -> model).
+HSRP_NOW=$("$APP/.venv/bin/python" - "$APP/config.yaml" <<'PY' 2>/dev/null || echo '?'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+print((d.get("hsrp") or {}).get("method", "model"))
+PY
+)
+echo "  HSRP check: $HSRP_NOW  (hsrp.method in $APP/config.yaml)"
 if [ "$MODE" = "ingest" ]; then
   PORT=$("$APP/.venv/bin/python" - "$APP/config.yaml" <<'PY' 2>/dev/null || echo 8080
 import sys, yaml

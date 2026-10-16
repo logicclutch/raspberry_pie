@@ -205,6 +205,19 @@ class Engine:
                 fallback = _shared_hsrp_model(c.model_path, c.threshold, c.margin, c.two_line_marks)
             hsrp_look = FontCheck(fallback)
             log.info("hsrp: font check (hsrp.method: font), model fallback: %s", fallback is not None)
+        if hsrp_look is None and cfg.hsrp.enabled and cfg.hsrp.method == "combined":
+            from pathlib import Path
+
+            from anpr.hsrp import CombinedCheck, FontCheck
+
+            c = cfg.hsrp
+            if Path(c.model_path).is_file():
+                model = _shared_hsrp_model(c.model_path, c.threshold, c.margin, c.two_line_marks)
+                hsrp_look = CombinedCheck(model)
+                log.info("hsrp: combined (hsrp.method: combined): model decides, font breaks its not sure")
+            else:
+                hsrp_look = FontCheck()
+                log.warning("hsrp: model %s not found, combined uses the font check alone", c.model_path)
         if hsrp_look is None and cfg.hsrp.enabled and cfg.hsrp.method == "model":
             from pathlib import Path
 
@@ -225,9 +238,9 @@ class Engine:
                 rule=cfg.hsrp.rule,
             )
         self.hsrp_look = hsrp_look
-        from anpr.hsrp import HsrpModel
+        from anpr.hsrp import CombinedCheck, HsrpModel
 
-        self._hsrp_is_model = isinstance(hsrp_look, HsrpModel)
+        self._hsrp_is_model = isinstance(hsrp_look, (HsrpModel, CombinedCheck))
         self._hsrp_max_looks = HSRP_MODEL_MAX_LOOKS if self._hsrp_is_model else HSRP_MAX_LOOKS
         # per track: (plate width, look, why not judged, classifier p or None, the read of that view)
         self._hsrp: dict[int, list[tuple[int, str | None, str, float | None, ValidPlate | None]]] = {}
@@ -614,13 +627,16 @@ class Engine:
         return self.validator.validate(OcrResult(text, (0.9,) * len(text)))
 
     def _hsrp_plate_read(self, tid: int) -> ValidPlate | None:
-        """The read of the view judged most surely HSRP (classifier p, then read confidence), or None."""
+        """The read of the view judged most surely HSRP, or None. Font mode: a view the font check
+        measured (p None) comes first - its letters were clear enough to measure, while the model
+        fallback only answers for a small, blurred or low-contrast view. Then classifier p, then
+        read confidence. (In model mode every view has p; in rule mode none has.)"""
         hsrp_views = [
-            (p or 0.0, rd.confidence, rd)
+            (p is None, p or 0.0, rd.confidence, rd)
             for _, lk, _, p, rd in self._hsrp.get(tid, [])
             if lk == "hsrp" and rd is not None
         ]
-        return max(hsrp_views, key=lambda v: (v[0], v[1]))[2] if hsrp_views else None
+        return max(hsrp_views, key=lambda v: v[:3])[3] if hsrp_views else None
 
     def _hsrp_result(self, tid: int) -> str | None:
         """HSRP / non-HSRP from the track's looks so far, or for a plate that could not be judged
@@ -636,6 +652,7 @@ class Engine:
             # One vehicle, several images: HSRP when every image says so, or when one image is SURE of
             # it (an HSRP on the grille + a painted copy on the bumper). A weak HSRP image against
             # other images is "not sure" - on 2-image test vehicles a weak view made 2 false HSRP.
+            # Only the classifier gives p; a font-check answer (p None) is never sure.
             from anpr.hsrp import STRONG_P, WHY_VIEWS_DISAGREE
 
             if all(lk == "hsrp" for lk in looks) or any(
